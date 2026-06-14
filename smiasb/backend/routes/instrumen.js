@@ -4973,8 +4973,15 @@ function normalizeKelasSqlExpression(column) {
 // ============================================================
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { jenis, status, kelas, mapel, search, id_sekolah, page = 1, limit = 10 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { jenis, status, kelas, mapel, search, id_sekolah } = req.query;
+    const parsedPage = Number.parseInt(req.query.page, 10);
+    const parsedLimit = Number.parseInt(req.query.limit, 10);
+    const page = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10)
+    );
+    const offset = (page - 1) * limit;
 
     let where = [];
     let params = [];
@@ -5011,15 +5018,15 @@ router.get('/', authenticate, async (req, res) => {
 
     const whereStr = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
-    const [rows] = await pool.execute(
+    const [rows] = await pool.query(
       `SELECT i.*, u.nama AS pembuat,
         (SELECT COUNT(*) FROM soal WHERE soal.instrumen_id = i.id) as jumlah_soal_terisi
        FROM instrumen i
        LEFT JOIN users u ON i.dibuat_oleh = u.id
        ${whereStr}
        ORDER BY i.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
     );
 
     const [total] = await pool.execute(
@@ -5032,9 +5039,9 @@ router.get('/', authenticate, async (req, res) => {
       data: rows,
       pagination: {
         total: total[0].total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total[0].total / parseInt(limit))
+        page,
+        limit,
+        totalPages: Math.ceil(total[0].total / limit)
       }
     });
   } catch (err) {
