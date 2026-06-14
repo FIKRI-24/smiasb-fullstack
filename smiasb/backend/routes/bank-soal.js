@@ -10,12 +10,15 @@ const {
   isSuperAdmin
 } = require('../utils/accessControl');
 
-const ALLOWED_LIMITS = [10, 20, 50, 100];
-
 function getPagination(query = {}) {
-  const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
-  const requestedLimit = Number.parseInt(query.limit, 10) || 10;
-  const limit = ALLOWED_LIMITS.includes(requestedLimit) ? requestedLimit : 10;
+  const parsedPage = Number.parseInt(query.page, 10);
+  const parsedLimit = Number.parseInt(query.limit, 10);
+
+  const page = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const limit = Math.min(
+    100,
+    Math.max(1, Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10)
+  );
   const offset = (page - 1) * limit;
 
   return { page, limit, offset };
@@ -180,7 +183,7 @@ router.get(
          ${whereSql}
          ORDER BY bs.created_at DESC, bs.id DESC
          LIMIT ? OFFSET ?`,
-        [...filter.params, limit, offset]
+        [...filter.params, Number(limit), Number(offset)]
       );
 
       const [totalRows] = await pool.execute(
