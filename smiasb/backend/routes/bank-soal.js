@@ -182,8 +182,8 @@ router.get(
          LEFT JOIN sekolah sk ON sk.id = bs.id_sekolah
          ${whereSql}
          ORDER BY bs.created_at DESC, bs.id DESC
-         LIMIT ? OFFSET ?`,
-        [...filter.params, Number(limit), Number(offset)]
+         LIMIT ${limit} OFFSET ${offset}`,
+        filter.params
       );
 
       const [totalRows] = await pool.execute(
