@@ -20,12 +20,19 @@ const bankSoalRoutes = require('./routes/bank-soal');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = [
+  'https://smiasb.adabiah.sch.id',
+  'https://gallant-charm-production-6c69.up.railway.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
 app.use('/uploads/users', express.static(path.join(__dirname, 'uploads')));
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://smiasb.adabiah.sch.id']
-    : ['http://localhost:3000', 'http://localhost:5173'],
+  origin: allowedOrigins,
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json({ limit: '10mb' }));
