@@ -158,7 +158,7 @@ router.get(
       if (!filter.ok) return denyAccess(res);
 
       const whereSql = getWhereSql(filter.where);
-      const [rows] = await pool.execute(
+      const [rows] = await pool.query(
         `SELECT
           bs.id,
           bs.id_sekolah,
@@ -186,7 +186,7 @@ router.get(
         filter.params
       );
 
-      const [totalRows] = await pool.execute(
+      const [totalRows] = await pool.query(
         `SELECT COUNT(*) AS total
          FROM bank_soal bs
          ${whereSql}`,
