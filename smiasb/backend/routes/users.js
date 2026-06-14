@@ -39,8 +39,15 @@ function canAccessUserTarget(currentUser, targetUser, allowSelf = true) {
 // ============================================================
 router.get('/', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const { peran, search, id_sekolah, page = 1, limit = 20 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { peran, search, id_sekolah } = req.query;
+    const parsedPage = Number.parseInt(req.query.page, 10);
+    const parsedLimit = Number.parseInt(req.query.limit, 10);
+    const page = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20)
+    );
+    const offset = (page - 1) * limit;
     let where = [];
     let params = [];
 
@@ -58,18 +65,18 @@ router.get('/', authenticate, authorize('admin'), async (req, res) => {
 
     const whereStr = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
-    const [rows] = await pool.execute(
+    const [rows] = await pool.query(
       `SELECT u.id, u.nama, u.email, u.peran, u.id_sekolah, s.nama_sekolah,
               u.mata_pelajaran, u.nip, u.kelas, u.nis, u.foto, u.is_aktif, u.created_at
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
        ${whereStr}
        ORDER BY u.peran, u.nama
-       LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
     );
 
-    const [total] = await pool.execute(
+    const [total] = await pool.query(
       `SELECT COUNT(*) as total
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
@@ -80,7 +87,7 @@ router.get('/', authenticate, authorize('admin'), async (req, res) => {
     return res.json({
       success: true,
       data: rows,
-      pagination: { total: total[0].total, page: parseInt(page), limit: parseInt(limit) }
+      pagination: { total: total[0].total, page, limit }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Terjadi kesalahan server.' });
