@@ -11,5 +11,8 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  preview: {
+    allowedHosts: ['gallant-charm-production-6c69.up.railway.app'],
   }
 })
