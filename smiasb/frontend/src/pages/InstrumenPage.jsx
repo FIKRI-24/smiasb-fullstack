@@ -44,6 +44,8 @@ const jenisColor = { HOTS:'blue', Literasi:'teal', Numerasi:'amber' }
 const statusColor = { aktif:'teal', draft:'amber', nonaktif:'coral' }
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
 const isAdminRole = (peran) => ['admin', 'admin_sekolah', 'super_admin'].includes(peran)
+const IMPORT_DRAFT_PREFIX = 'smiasb_import_draft'
+const IMPORT_DRAFT_TTL_MS = 60 * 60 * 1000
 
 const toAssetUrl = (src) => {
   if (!src) return ''
@@ -289,6 +291,7 @@ export default function InstrumenPage() {
   const [importError, setImportError] = useState('')
   const [importSuccess, setImportSuccess] = useState('')
   const [studentPreviewIndex, setStudentPreviewIndex] = useState(null)
+  const importFileInputRef = useRef(null)
   const [showDuplicateModal, setShowDuplicateModal] = useState(false)
   const [duplicateItem, setDuplicateItem] = useState(null)
   const [duplicateForm, setDuplicateForm] = useState(emptyDuplicateForm)
@@ -370,6 +373,167 @@ export default function InstrumenPage() {
       })
     })
   }
+
+  const getImportDraftKey = (instrumenId, mode = importMode) => (
+    instrumenId ? `${IMPORT_DRAFT_PREFIX}_${instrumenId}_${mode}` : ''
+  )
+
+  const hasImportSessionContent = () => (
+    importPreview.length > 0 || Boolean(importSummary) || Boolean(importDocument)
+  )
+
+  const hasImportDraftContent = (draft = {}) => {
+    const state = draft.state || {}
+    return (
+      Array.isArray(state.importPreview) && state.importPreview.length > 0
+    ) || Boolean(state.importSummary) || Boolean(state.importDocument)
+  }
+
+  const clearImportDraft = (instrumenId, mode = importMode) => {
+    const key = getImportDraftKey(instrumenId, mode)
+    if (!key || typeof window === 'undefined') return
+    window.localStorage.removeItem(key)
+  }
+
+  const readImportDraft = (instrumenId, mode = importMode) => {
+    const key = getImportDraftKey(instrumenId, mode)
+    if (!key || typeof window === 'undefined') return null
+
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return null
+
+      const draft = JSON.parse(raw)
+      const savedAt = Number(draft.savedAt || 0)
+      const isExpired = !savedAt || Date.now() - savedAt > IMPORT_DRAFT_TTL_MS
+      if (isExpired || !hasImportDraftContent(draft)) {
+        window.localStorage.removeItem(key)
+        return null
+      }
+
+      return draft
+    } catch {
+      window.localStorage.removeItem(key)
+      return null
+    }
+  }
+
+  const writeImportDraft = () => {
+    if (!showImportModal || !importItem || !hasImportSessionContent() || typeof window === 'undefined') return
+
+    const key = getImportDraftKey(importItem.id, importMode)
+    if (!key) return
+
+    const now = Date.now()
+    const draft = {
+      version: 1,
+      mode: importMode,
+      savedAt: now,
+      expiresAt: now + IMPORT_DRAFT_TTL_MS,
+      state: {
+        importPreview,
+        importSummary,
+        importDocument,
+        importTab,
+        parserInfo,
+        importQualityReport
+      }
+    }
+
+    try {
+      window.localStorage.setItem(key, JSON.stringify(draft))
+    } catch {
+      // localStorage can fail when the preview is very large; the UI still works in-memory.
+    }
+  }
+
+  const resetImportSession = (mode = 'word') => {
+    setImportMode(mode)
+    setImportFile(null)
+    setImportPreview([])
+    setImportSummary(null)
+    setImportDocument(null)
+    setImportTab('document')
+    setParserInfo(null)
+    setImportQualityReport(null)
+    setImportError('')
+    setImportSuccess('')
+    setStudentPreviewIndex(null)
+    if (importFileInputRef.current) importFileInputRef.current.value = ''
+  }
+
+  const restoreImportDraft = (item, mode, draft) => {
+    const state = draft.state || {}
+    setImportItem(item)
+    setImportMode(mode)
+    setImportFile(null)
+    setImportPreview(normalizeImportPreviewList(state.importPreview || []))
+    setImportSummary(state.importSummary || null)
+    setImportDocument(state.importDocument || null)
+    setImportTab(state.importTab || (mode === 'excel' ? 'questions' : 'document'))
+    setParserInfo(state.parserInfo || null)
+    setImportQualityReport(state.importQualityReport || null)
+    setImportError('')
+    setImportSuccess('Draft preview sebelumnya dilanjutkan. Draft otomatis berlaku 1 jam sejak terakhir tersimpan.')
+    setStudentPreviewIndex(null)
+    setShowImportModal(true)
+    if (importFileInputRef.current) importFileInputRef.current.value = ''
+  }
+
+  const openImportSession = async (item, mode = 'word') => {
+    if (item.status === 'aktif') {
+      toast.error('Instrumen sudah aktif. Ubah status ke draft/nonaktif dulu sebelum import soal.')
+      return
+    }
+
+    const draft = readImportDraft(item.id, mode)
+    if (draft) {
+      const resume = await confirmToast(
+        'Draft preview sebelumnya ditemukan dan belum lebih dari 1 jam. Lanjutkan edit draft itu atau mulai ulang import?',
+        {
+          title: 'Lanjutkan draft?',
+          confirmText: 'Lanjutkan Draft',
+          cancelText: 'Mulai Ulang'
+        }
+      )
+
+      if (resume) {
+        restoreImportDraft(item, mode, draft)
+        return
+      }
+
+      clearImportDraft(item.id, mode)
+    }
+
+    setImportItem(item)
+    resetImportSession(mode)
+    setShowImportModal(true)
+  }
+
+  useEffect(() => {
+    writeImportDraft()
+  }, [
+    showImportModal,
+    importItem,
+    importMode,
+    importPreview,
+    importSummary,
+    importDocument,
+    importTab,
+    parserInfo,
+    importQualityReport
+  ])
+
+  useEffect(() => {
+    const handleBeforeUnload = (event) => {
+      if (!showImportModal || !hasImportSessionContent()) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [showImportModal, importPreview, importSummary, importDocument])
 
   const canEdit = isAdminRole(user?.peran) || user?.peran === 'guru' 
 
@@ -473,59 +637,53 @@ export default function InstrumenPage() {
 
   // ========== TAMBAHAN: HELPER IMPORT WORD ==========
   const openImportWord = (item) => {
-    if (item.status === 'aktif') {
-      toast.error('Instrumen sudah aktif. Ubah status ke draft/nonaktif dulu sebelum import soal.')
-      return
-    }
-
-    setImportItem(item)
-    setImportMode('word')
-    setImportFile(null)
-    setImportPreview([])
-    setImportSummary(null)
-    setImportDocument(null)
-    setImportTab('document')
-    setParserInfo(null)
-    setImportQualityReport(null)
-    setImportError('')
-    setImportSuccess('')
-    setStudentPreviewIndex(null)
-    setShowImportModal(true)
+    openImportSession(item, 'word')
   }
 
   const openImportExcel = (item) => {
-    if (item.status === 'aktif') {
-      toast.error('Instrumen sudah aktif. Ubah status ke draft/nonaktif dulu sebelum import soal.')
-      return
-    }
-
-    setImportItem(item)
-    setImportMode('excel')
-    setImportFile(null)
-    setImportPreview([])
-    setImportSummary(null)
-    setImportDocument(null)
-    setImportTab('document')
-    setParserInfo(null)
-    setImportQualityReport(null)
-    setImportError('')
-    setImportSuccess('')
-    setStudentPreviewIndex(null)
-    setShowImportModal(true)
+    openImportSession(item, 'excel')
   }
 
   const closeImportWord = () => {
     if (importLoading || importSaving) return
+    writeImportDraft()
+    if (hasImportSessionContent()) {
+      toast.success('Draft preview disimpan sementara selama 1 jam.')
+    }
     setShowImportModal(false)
     setImportItem(null)
-    setImportMode('word')
-    setImportFile(null)
+    resetImportSession('word')
+  }
+
+  const handleImportFileChange = async (event) => {
+    const nextFile = event.target.files?.[0] || null
+
+    if (nextFile && hasImportSessionContent()) {
+      const ok = await confirmToast(
+        'Mengganti file akan menghapus draft preview yang sedang diedit. Lanjutkan?',
+        {
+          title: 'Ganti file import?',
+          confirmText: 'Ganti File',
+          cancelText: 'Batal',
+          danger: true
+        }
+      )
+
+      if (!ok) {
+        event.target.value = ''
+        return
+      }
+
+      clearImportDraft(importItem?.id, importMode)
+    }
+
+    setImportFile(nextFile)
     setImportPreview([])
     setImportSummary(null)
     setImportDocument(null)
-    setImportTab('document')
     setParserInfo(null)
     setImportQualityReport(null)
+    setImportTab('document')
     setImportError('')
     setImportSuccess('')
     setStudentPreviewIndex(null)
@@ -1993,6 +2151,22 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
       return
     }
 
+    const hadContentBeforePreview = hasImportSessionContent()
+    if (hadContentBeforePreview) {
+      writeImportDraft()
+      const ok = await confirmToast(
+        'Preview ulang akan mengganti draft soal yang sedang diedit. Lanjutkan?',
+        {
+          title: 'Preview ulang?',
+          confirmText: 'Preview Ulang',
+          cancelText: 'Batal',
+          danger: true
+        }
+      )
+
+      if (!ok) return
+    }
+
     setImportLoading(true)
     setImportError('')
     setImportSuccess('')
@@ -2028,12 +2202,14 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
       toast.success(successMessage)
     } catch (err) {
       const message = err.response?.data?.message || 'Gagal membaca file Word.'
-      setImportPreview([])
-      setImportSummary(null)
-      setImportDocument(null)
-      setParserInfo(null)
-      setImportQualityReport(null)
-      setImportTab('document')
+      if (!hadContentBeforePreview) {
+        setImportPreview([])
+        setImportSummary(null)
+        setImportDocument(null)
+        setParserInfo(null)
+        setImportQualityReport(null)
+        setImportTab('document')
+      }
       setImportError(message)
       toast.error(message)
     } finally {
@@ -2062,6 +2238,22 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
       setImportError(message)
       toast.error(message)
       return
+    }
+
+    const hadContentBeforePreview = hasImportSessionContent()
+    if (hadContentBeforePreview) {
+      writeImportDraft()
+      const ok = await confirmToast(
+        'Preview ulang akan mengganti draft soal yang sedang diedit. Lanjutkan?',
+        {
+          title: 'Preview ulang?',
+          confirmText: 'Preview Ulang',
+          cancelText: 'Batal',
+          danger: true
+        }
+      )
+
+      if (!ok) return
     }
 
     setImportLoading(true)
@@ -2104,12 +2296,14 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
       toast.success(successMessage)
     } catch (err) {
       const message = err.response?.data?.message || 'Gagal membaca file Excel.'
-      setImportPreview([])
-      setImportSummary(null)
-      setImportDocument(null)
-      setParserInfo(null)
-      setImportQualityReport(null)
-      setImportTab('document')
+      if (!hadContentBeforePreview) {
+        setImportPreview([])
+        setImportSummary(null)
+        setImportDocument(null)
+        setParserInfo(null)
+        setImportQualityReport(null)
+        setImportTab('document')
+      }
       setImportError(message)
       toast.error(message)
     } finally {
@@ -2165,17 +2359,11 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
       setImportSuccess(res.data.message || 'Soal berhasil disimpan.')
       toast.success(`${res.data.data?.total_disimpan || importPreview.length} soal berhasil disimpan`)
+      clearImportDraft(importItem.id, importMode)
 
       setShowImportModal(false)
       setImportItem(null)
-      setImportFile(null)
-      setImportPreview([])
-      setImportSummary(null)
-      setImportDocument(null)
-      setParserInfo(null)
-      setImportQualityReport(null)
-      setImportTab('document')
-      setStudentPreviewIndex(null)
+      resetImportSession('word')
       fetchData(pagination.page)
     } catch (err) {
       const message = err.response?.data?.message || 'Gagal menyimpan soal hasil import Word.'
@@ -2215,6 +2403,11 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               }}
             >
               <figure style={{ width, maxWidth: '100%', margin: 0 }}>
+                {(g.caption || g.alt) && (
+                  <figcaption style={{ marginBottom: 6, fontSize: 12, color: '#64748B', textAlign: g.align || 'center' }}>
+                    {g.caption || g.alt}
+                  </figcaption>
+                )}
                 <img
                   src={toAssetUrl(g.src)}
                   alt={g.alt || g.caption || 'Gambar soal'}
@@ -2227,11 +2420,6 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     background: '#fff'
                   }}
                 />
-                {(g.caption || g.alt) && (
-                  <figcaption style={{ marginTop: 6, fontSize: 12, color: '#64748B', textAlign: g.align || 'center' }}>
-                    {g.caption || g.alt}
-                  </figcaption>
-                )}
               </figure>
             </div>
           )
@@ -2939,7 +3127,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
      {/* ========== TAMBAHAN: MODAL IMPORT WORD / EXCEL ========== */}
 {showImportModal && importItem && (
-  <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closeImportWord()}>
+  <div className="modal-overlay">
     <div
       className="modal"
       style={{
@@ -3001,20 +3189,10 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
         }}
       >
         <input
+          ref={importFileInputRef}
           type="file"
           accept={importMode === 'excel' ? '.xlsx' : '.docx'}
-          onChange={e => {
-            setImportFile(e.target.files?.[0] || null)
-            setImportPreview([])
-            setImportSummary(null)
-            setImportDocument(null)
-            setParserInfo(null)
-            setImportQualityReport(null)
-            setImportTab('document')
-            setImportError('')
-            setImportSuccess('')
-            setStudentPreviewIndex(null)
-          }}
+          onChange={handleImportFileChange}
         />
 
         <button
