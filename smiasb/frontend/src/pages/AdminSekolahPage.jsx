@@ -161,7 +161,7 @@ export default function AdminSekolahPage() {
       await superAdminAPI.resetAdminSekolahPassword(activeAdmin.id_user, resetForm.password_baru)
       closeModal()
     } catch (err) {
-      setError(err.response?.data?.message || 'Gagal reset password admin sekolah.')
+      setError(err.response?.data?.message || 'Gagal mengedit password admin sekolah.')
     } finally {
       setSaving(false)
     }
@@ -267,7 +267,7 @@ export default function AdminSekolahPage() {
                     <td>
                       <div className="school-actions">
                         <button className="btn btn-sm" onClick={() => openEditModal(admin)}>Edit</button>
-                        <button className="btn btn-sm" onClick={() => openResetModal(admin)}>Reset Password</button>
+                        <button className="btn btn-sm" onClick={() => openResetModal(admin)}>Edit Password</button>
                         <button
                           className={admin.is_aktif ? 'btn btn-sm btn-danger' : 'btn btn-sm'}
                           onClick={() => handleToggleStatus(admin)}
@@ -400,7 +400,7 @@ function ResetPasswordModal({ admin, form, saving, error, onClose, onChange, onS
   return (
     <div className="modal-overlay" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="modal school-modal">
-        <div className="modal-title">Reset Password Admin Sekolah</div>
+        <div className="modal-title">Edit Password Admin Sekolah</div>
         <p className="admin-school-reset-note">
           Akun: <strong>{admin?.nama || '-'}</strong>
         </p>
@@ -432,7 +432,7 @@ function ResetPasswordModal({ admin, form, saving, error, onClose, onChange, onS
         <div className="modal-actions">
           <button className="btn" onClick={onClose} disabled={saving}>Batal</button>
           <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-            {saving ? <><span className="spinner" /> Menyimpan...</> : 'Reset Password'}
+            {saving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan Password'}
           </button>
         </div>
       </div>
