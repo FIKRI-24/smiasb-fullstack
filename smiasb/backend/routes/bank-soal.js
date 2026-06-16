@@ -7,7 +7,8 @@ const {
   appendSekolahScope,
   canAccessInstrumen,
   denyAccess,
-  isSuperAdmin
+  isSuperAdmin,
+  normalizeKelas
 } = require('../utils/accessControl');
 
 function getPagination(query = {}) {
@@ -34,8 +35,8 @@ function buildBankSoalWhere(query, user) {
   }
 
   if (query.kelas) {
-    where.push('bs.kelas = ?');
-    params.push(query.kelas);
+    where.push(`${normalizeKelasSqlExpression('bs.kelas')} = ?`);
+    params.push(normalizeKelasForCompare(query.kelas));
   }
 
   if (query.mata_pelajaran) {
@@ -90,20 +91,106 @@ function safeJsonParse(value, fallback = null) {
   }
 }
 
-function normalizeDuplicateText(value = '') {
+function normalizeKelasForCompare(value) {
+  return normalizeKelas(value)
+    .replace(/[_\s]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function normalizeKelasSqlExpression(column) {
+  if (!/^[A-Za-z0-9_.]+$/.test(column)) {
+    throw new Error(`Nama kolom kelas tidak valid: ${column}`);
+  }
+
+  const base = `UPPER(TRIM(REPLACE(${column}, '_', ' ')))`;
+  const spacesCollapsed = [
+    '     ',
+    '    ',
+    '   ',
+    '  ',
+    '  '
+  ].reduce((expr, spaces) => `REPLACE(${expr}, '${spaces}', ' ')`, base);
+  const spacesToDashes = `REPLACE(${spacesCollapsed}, ' ', '-')`;
+
+  return [
+    '--',
+    '--',
+    '--'
+  ].reduce((expr, dashes) => `REPLACE(${expr}, '${dashes}', '-')`, spacesToDashes);
+}
+
+function normalizeComparableText(value = '') {
   return String(value || '')
     .replace(/<[^>]*>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
+    .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 }
 
+function parseBoolean(value, defaultValue = false) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'ya', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'tidak', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function canonicalizeDuplicateValue(value) {
+  if (value === undefined || value === null || value === '') return null;
+
+  const parsed = typeof value === 'string'
+    ? safeJsonParse(value, value)
+    : value;
+
+  if (Array.isArray(parsed)) {
+    return parsed.map(item => canonicalizeDuplicateValue(item));
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    return Object.keys(parsed)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = canonicalizeDuplicateValue(parsed[key]);
+        return acc;
+      }, {});
+  }
+
+  if (typeof parsed === 'string') return normalizeComparableText(parsed);
+  return parsed;
+}
+
+function stableDuplicateStringify(value) {
+  const canonical = canonicalizeDuplicateValue(value);
+  return canonical === null ? '' : JSON.stringify(canonical);
+}
+
+function normalizeDuplicateText(value = '') {
+  return normalizeComparableText(value);
+}
+
 function getDuplicateKey(soal = {}) {
+  const tabelData = soal.tabel_data || buildTabelDataFromBankSoal(soal);
+
   return [
     normalizeDuplicateText(soal.pertanyaan),
     String(soal.tipe_soal || '').trim().toLowerCase(),
-    normalizeDuplicateText(soal.jawaban_benar)
+    normalizeDuplicateText(soal.pilihan_a),
+    normalizeDuplicateText(soal.pilihan_b),
+    normalizeDuplicateText(soal.pilihan_c),
+    normalizeDuplicateText(soal.pilihan_d),
+    normalizeDuplicateText(soal.pilihan_e),
+    normalizeDuplicateText(soal.jawaban_benar),
+    stableDuplicateStringify(soal.jawaban_benar_json),
+    stableDuplicateStringify(tabelData),
+    stableDuplicateStringify(soal.gambar_soal),
+    stableDuplicateStringify(soal.pasangan_menjodohkan),
+    stableDuplicateStringify(soal.pernyataan_checklist)
   ].join('|');
 }
 
@@ -144,6 +231,52 @@ function normalizeIdList(value) {
       seen.add(item);
       return true;
     });
+}
+
+function isSameKelas(left, right) {
+  const normalizedLeft = normalizeKelasForCompare(left);
+  const normalizedRight = normalizeKelasForCompare(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function isSameTextLabel(left, right) {
+  const normalizedLeft = normalizeComparableText(left);
+  const normalizedRight = normalizeComparableText(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function getCompatibilityIssues(bankSoal = {}, instrumen = {}, options = {}) {
+  const issues = [];
+
+  if (!options.allowCrossClass && !isSameKelas(bankSoal.kelas, instrumen.kelas)) {
+    issues.push('kelas');
+  }
+
+  if (!isSameTextLabel(bankSoal.mata_pelajaran, instrumen.mata_pelajaran)) {
+    issues.push('mata_pelajaran');
+  }
+
+  if (!isSameTextLabel(bankSoal.jenis_instrumen, instrumen.jenis)) {
+    issues.push('jenis_instrumen');
+  }
+
+  return issues;
+}
+
+function summarizeCompatibilityIssues(incompatibleRows = []) {
+  const summary = incompatibleRows.reduce((acc, item) => {
+    item.issues.forEach(issue => {
+      acc[issue] = (acc[issue] || 0) + 1;
+    });
+    return acc;
+  }, {});
+
+  const parts = [];
+  if (summary.kelas) parts.push(`${summary.kelas} beda kelas`);
+  if (summary.mata_pelajaran) parts.push(`${summary.mata_pelajaran} beda mata pelajaran`);
+  if (summary.jenis_instrumen) parts.push(`${summary.jenis_instrumen} beda jenis instrumen`);
+
+  return parts.join(', ');
 }
 
 // GET /api/bank-soal - daftar Bank Soal
@@ -265,6 +398,7 @@ router.post(
   async (req, res) => {
     const instrumenId = Number(req.body?.instrumen_id);
     const bankSoalIds = normalizeIdList(req.body?.bank_soal_ids);
+    const allowCrossClass = parseBoolean(req.body?.allow_cross_class, false);
 
     if (!Number.isInteger(instrumenId) || instrumenId <= 0) {
       return res.status(400).json({
@@ -294,7 +428,12 @@ router.post(
         });
       }
 
-      const instrumen = access.instrumen;
+      const [lockedInstrumenRows] = await conn.execute(
+        'SELECT * FROM instrumen WHERE id = ? FOR UPDATE',
+        [instrumenId]
+      );
+      const instrumen = lockedInstrumenRows[0] || access.instrumen;
+
       if (instrumen.status === 'aktif') {
         await conn.rollback();
         return res.status(400).json({
@@ -325,10 +464,34 @@ router.post(
       const foundIds = new Set(bankRows.map(item => Number(item.id)));
       let skippedCount = bankSoalIds.filter(id => !foundIds.has(id)).length;
 
+      const incompatibleRows = bankRows
+        .map(bankSoal => ({
+          id: Number(bankSoal.id),
+          kelas: bankSoal.kelas,
+          mata_pelajaran: bankSoal.mata_pelajaran,
+          jenis_instrumen: bankSoal.jenis_instrumen,
+          issues: getCompatibilityIssues(bankSoal, instrumen, { allowCrossClass })
+        }))
+        .filter(item => item.issues.length > 0);
+
+      if (incompatibleRows.length) {
+        await conn.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Ada soal Bank Soal yang tidak cocok dengan instrumen tujuan (${summarizeCompatibilityIssues(incompatibleRows)}).`,
+          incompatible_count: incompatibleRows.length,
+          incompatible_items: incompatibleRows
+        });
+      }
+
       const [existingRows] = await conn.execute(
-        `SELECT id, pertanyaan, tipe_soal, jawaban_benar
+        `SELECT id, pertanyaan, gambar_soal, tabel_data,
+          pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
+          jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
+          pasangan_menjodohkan, pernyataan_checklist
          FROM soal
-         WHERE instrumen_id = ?`,
+         WHERE instrumen_id = ?
+         FOR UPDATE`,
         [instrumenId]
       );
 
@@ -346,6 +509,7 @@ router.post(
 
       const addedSoalIds = [];
       const usedBankSoalIds = [];
+      let crossClassCount = 0;
 
       for (const bankSoal of bankRows) {
         if (remainingSlots <= 0) {
@@ -389,6 +553,9 @@ router.post(
 
         addedSoalIds.push(insertResult.insertId);
         usedBankSoalIds.push(bankSoal.id);
+        if (!isSameKelas(bankSoal.kelas, instrumen.kelas)) {
+          crossClassCount += 1;
+        }
         existingKeys.add(duplicateKey);
         nextNomor += 1;
         remainingSlots -= 1;
@@ -413,6 +580,10 @@ router.post(
           : 'Tidak ada soal baru yang ditambahkan.',
         added_count: addedSoalIds.length,
         skipped_count: skippedCount,
+        cross_class_count: crossClassCount,
+        warning: crossClassCount > 0
+          ? `${crossClassCount} soal dari kelas berbeda ditambahkan.`
+          : null,
         added_soal_ids: addedSoalIds
       });
     } catch (err) {

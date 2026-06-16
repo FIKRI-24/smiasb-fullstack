@@ -89,6 +89,7 @@ function getTableMetadata(tabelData) {
 function createQuestionHash(soal, metadata = {}) {
   const payload = {
     id_sekolah: metadata.id_sekolah,
+    kelas: metadata.kelas,
     pertanyaan: soal.pertanyaan,
     stimulus_tambahan: metadata.stimulus_tambahan,
     tipe_soal: soal.tipe_soal,
@@ -149,7 +150,8 @@ async function syncInstrumenToBankSoal(instrumenId, options = {}) {
   for (const soal of soalRows) {
     const metadata = {
       ...getTableMetadata(soal.tabel_data),
-      id_sekolah: instrumen.id_sekolah
+      id_sekolah: instrumen.id_sekolah,
+      kelas: instrumen.kelas || null
     };
     const questionHash = createQuestionHash(soal, metadata);
 

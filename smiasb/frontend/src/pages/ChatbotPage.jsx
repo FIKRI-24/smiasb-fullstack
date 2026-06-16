@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { chatbotAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
+import { confirmToast, toast } from '../utils/notify'
 
 const SUGGESTIONS = [
   'Apa itu HOTS?',
@@ -11,12 +13,25 @@ const SUGGESTIONS = [
   'Bedanya HOTS, Literasi, dan Numerasi',
 ]
 
+const STUDENT_GUIDE_PROMPT = 'Petunjuk penggunaan sistem untuk siswa'
+const ACTIVE_CHATBOT_INSTRUMENT_KEY = 'smiasb_active_chatbot_instrumen_id'
+
+function normalizeRole(role) {
+  return String(role || '').trim().toLowerCase()
+}
+
 export default function ChatbotPage() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  const currentRole = normalizeRole(user?.peran || user?.role)
+  const isStudent = currentRole === 'siswa'
+  const contextInstrumenId = isStudent
+    ? searchParams.get('instrumen_id') || window.sessionStorage.getItem(ACTIVE_CHATBOT_INSTRUMENT_KEY) || ''
+    : ''
   const namaSekolah = user?.nama_sekolah || user?.school_name || user?.sekolah || null
-  const roleLabel = ['admin', 'admin_sekolah', 'super_admin'].includes(user?.peran)
+  const roleLabel = ['admin', 'admin_sekolah', 'super_admin'].includes(currentRole)
     ? 'admin'
-    : user?.peran || user?.role || 'pengguna'
+    : currentRole || 'pengguna'
   const welcomeText = namaSekolah
     ? `Halo, ${roleLabel}! Saya ASB, Asisten Belajar ${namaSekolah}. Saya siap membantu Anda memahami instrumen penilaian HOTS, Literasi, dan Numerasi, serta penggunaan sistem ini.`
     : `Halo, pengguna! Saya ASB, Asisten Belajar Sekolah. Saya siap membantu Anda memahami instrumen penilaian HOTS, Literasi, dan Numerasi, serta penggunaan sistem ini.`
@@ -72,7 +87,7 @@ export default function ChatbotPage() {
     const history = messages.slice(-10).map(m => ({ dari: m.dari, teks: m.teks }))
 
     try {
-      const res = await chatbotAPI.send(msg, history)
+      const res = await chatbotAPI.send(msg, history, contextInstrumenId ? { instrumen_id: contextInstrumenId } : {})
       const botMsg = { id: Date.now() + 1, dari: 'bot', teks: res.data.data.balasan }
       setMessages(prev => [...prev, botMsg])
     } catch {
@@ -87,7 +102,12 @@ export default function ChatbotPage() {
   }
 
   const handleClear = async () => {
-    if (!window.confirm('Hapus semua riwayat chat?')) return
+    const ok = await confirmToast('Semua riwayat chat akan dihapus.', {
+      title: 'Hapus Riwayat Chat',
+      confirmText: 'Hapus',
+      tone: 'danger',
+    })
+    if (!ok) return
     setClearing(true)
     try {
       await chatbotAPI.clearHistory()
@@ -95,7 +115,10 @@ export default function ChatbotPage() {
         id: Date.now(), dari: 'bot',
         teks: welcomeText,
       }])
-    } catch {} finally { setClearing(false) }
+      toast.success('Riwayat chat berhasil dihapus.')
+    } catch {
+      toast.error('Gagal menghapus riwayat chat.')
+    } finally { setClearing(false) }
   }
 
   // Render teks dengan markdown sederhana (bold)
@@ -129,6 +152,11 @@ export default function ChatbotPage() {
       {/* Suggestions */}
       {messages.length <= 1 && (
         <div className="chat-suggestions">
+          {isStudent && (
+            <button className="chip" onClick={() => send(STUDENT_GUIDE_PROMPT)}>
+              Petunjuk penggunaan sistem
+            </button>
+          )}
           {SUGGESTIONS.map(s => (
             <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
           ))}
@@ -155,6 +183,11 @@ export default function ChatbotPage() {
       {/* Quick suggestions saat percakapan berlangsung */}
       {messages.length > 2 && (
         <div className="chat-suggestions" style={{marginBottom:8}}>
+          {isStudent && (
+            <button className="chip" onClick={() => send(STUDENT_GUIDE_PROMPT)}>
+              Petunjuk penggunaan sistem
+            </button>
+          )}
           {['Contoh soal lainnya','Jelaskan lebih detail','Apa hubungannya dengan kurikulum Merdeka?'].map(s => (
             <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
           ))}

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { authAPI, userAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
+import { confirmToast } from '../utils/notify'
 
 export default function ProfilPage() {
   const { user, login } = useAuth()
@@ -118,7 +119,12 @@ export default function ProfilPage() {
   }
 
   const handleHapusFoto = async () => {
-    if (!window.confirm('Apakah Anda yakin ingin menghapus foto profil?')) return
+    const ok = await confirmToast('Foto profil akan dihapus dari akun Anda.', {
+      title: 'Hapus Foto Profil',
+      confirmText: 'Hapus',
+      tone: 'danger',
+    })
+    if (!ok) return
 
     setUploadingFoto(true)
     setMsgFoto({ type: '', text: '' })

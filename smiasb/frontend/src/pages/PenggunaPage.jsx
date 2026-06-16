@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RotateCcw, Power, Trash2 } from 'lucide-react'
+import { KeyRound, Power, Trash2 } from 'lucide-react'
 import { userAPI } from '../api'
+import { KELAS } from '../constants/classes'
+import { confirmToast, toast } from '../utils/notify'
 
 const PERAN = ['admin_sekolah','guru','siswa']
 const MAPEL = ['Matematika','Bahasa Indonesia','Bahasa Inggris','IPA','IPS','PKn','Agama Islam','Seni Budaya','PJOK','Prakarya']
-const KELAS = ['VII A','VII B','VII C','VIII A','VIII B','VIII C','IX A','IX B','IX C']
 const roleColor = { super_admin:'purple', admin:'purple', admin_sekolah:'purple', guru:'blue', siswa:'teal' }
 const roleBadge = { super_admin:'badge-purple', admin:'badge-purple', admin_sekolah:'badge-purple', guru:'badge-blue', siswa:'badge-teal' }
 const emptyForm = { nama:'', email:'', password:'', peran:'guru', mata_pelajaran:'', nip:'', kelas:'', nis:'' }
@@ -20,6 +21,10 @@ export default function PenggunaPage() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [passwordModalUser, setPasswordModalUser] = useState(null)
+  const [newPassword, setNewPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordError, setPasswordError] = useState('')
 
   const fetch = async () => {
     setLoading(true)
@@ -66,22 +71,66 @@ export default function PenggunaPage() {
   }
 
   const handleToggle = async (id) => {
-    try { await userAPI.toggle(id); fetch() }
-    catch { alert('Gagal mengubah status.') }
+    try {
+      await userAPI.toggle(id)
+      toast.success('Status pengguna berhasil diperbarui.')
+      fetch()
+    }
+    catch {
+      toast.error('Gagal mengubah status.')
+    }
   }
 
-  const handleReset = async (id) => {
-    if (!window.confirm('Reset password ke Adabiah@123?')) return
+  const openPasswordModal = (user) => {
+    setPasswordModalUser(user)
+    setNewPassword('')
+    setPasswordError('')
+  }
+
+  const closePasswordModal = () => {
+    if (passwordSaving) return
+    setPasswordModalUser(null)
+    setNewPassword('')
+    setPasswordError('')
+  }
+
+  const handleEditPassword = async () => {
+    if (!passwordModalUser) return
+    if (newPassword.trim().length < 6) {
+      setPasswordError('Password baru minimal 6 karakter.')
+      return
+    }
+
+    setPasswordSaving(true)
+    setPasswordError('')
     try {
-      await userAPI.resetPassword(id, 'Adabiah@123')
-      alert('Password berhasil direset ke: Adabiah@123')
-    } catch { alert('Gagal reset password.') }
+      await userAPI.editPassword(passwordModalUser.id, newPassword.trim())
+      toast.success('Password pengguna berhasil diperbarui.')
+      setPasswordModalUser(null)
+      setNewPassword('')
+      setPasswordError('')
+    } catch (err) {
+      setPasswordError(err.response?.data?.message || 'Gagal memperbarui password.')
+    } finally {
+      setPasswordSaving(false)
+    }
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Yakin hapus pengguna ini?')) return
-    try { await userAPI.delete(id); fetch() }
-    catch (err) { alert(err.response?.data?.message || 'Gagal menghapus.') }
+    const ok = await confirmToast('Data pengguna akan dihapus dari sistem.', {
+      title: 'Hapus Pengguna',
+      confirmText: 'Hapus',
+      tone: 'danger',
+    })
+    if (!ok) return
+
+    try {
+      await userAPI.delete(id)
+      toast.success('Pengguna berhasil dihapus.')
+      fetch()
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Gagal menghapus pengguna.')
+    }
   }
 
   const counts = {
@@ -164,6 +213,39 @@ export default function PenggunaPage() {
               <button className="btn" onClick={() => setShowModal(false)}>Batal</button>
               <button className="btn btn-primary" onClick={handleAdd} disabled={saving}>
                 {saving ? <><span className="spinner" /> Menyimpan...</> : 'Tambah pengguna'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {passwordModalUser && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closePasswordModal()}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-title">Edit Password</div>
+            {passwordError && <div className="alert alert-error">{passwordError}</div>}
+
+            <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--gray-600)' }}>
+              Pengguna: <strong>{passwordModalUser.nama}</strong>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Password baru</label>
+              <input
+                className="input"
+                type="password"
+                placeholder="Min. 6 karakter"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleEditPassword()}
+                autoFocus
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn" onClick={closePasswordModal} disabled={passwordSaving}>Batal</button>
+              <button className="btn btn-primary" onClick={handleEditPassword} disabled={passwordSaving}>
+                {passwordSaving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan Password'}
               </button>
             </div>
           </div>
@@ -267,9 +349,14 @@ export default function PenggunaPage() {
                           <Power size={14} style={{marginRight: 6}} />
                           {u.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}
                         </button>
-                        <button className="btn btn-sm" onClick={() => handleReset(u.id)} title="Reset password">
-                          <RotateCcw size={14} style={{marginRight: 6}} />
-                          Reset
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => openPasswordModal(u)}
+                          title="Edit password"
+                          disabled={!['guru', 'siswa'].includes(u.peran)}
+                        >
+                          <KeyRound size={14} style={{marginRight: 6}} />
+                          Edit Password
                         </button>
                         <button className="btn btn-sm btn-danger" onClick={() => handleDelete(u.id)} title="Hapus">
                           <Trash2 size={14} style={{marginRight: 6}} />

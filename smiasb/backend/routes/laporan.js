@@ -208,6 +208,200 @@ function normalizeGlobalStats(stats) {
   };
 }
 
+let chatHistoryColumnsCache = null;
+
+async function getChatHistoryColumns() {
+  if (chatHistoryColumnsCache) return chatHistoryColumnsCache;
+
+  const [columns] = await pool.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_history'`
+  );
+
+  chatHistoryColumnsCache = new Set(columns.map(column => column.COLUMN_NAME));
+  return chatHistoryColumnsCache;
+}
+
+function firstQueryValue(query, names) {
+  for (const name of names) {
+    if (query[name] !== undefined && query[name] !== null && query[name] !== '') {
+      return query[name];
+    }
+  }
+  return null;
+}
+
+function normalizeDateOnly(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+}
+
+function normalizeChatbotStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (['success', 'berhasil', 'ok'].includes(status)) return 'success';
+  if (['error', 'gagal'].includes(status)) return 'error';
+  return '';
+}
+
+function getChatbotErrorExpression(hasIsErrorColumn) {
+  if (hasIsErrorColumn) {
+    return 'COALESCE(ch.is_error, 0)';
+  }
+
+  return `CASE
+    WHEN ch.balasan LIKE '%kesalahan%'
+      OR ch.balasan LIKE '%Gagal terhubung%'
+      OR ch.balasan LIKE '%bermasalah%'
+      OR ch.balasan LIKE '%tidak valid%'
+      OR ch.balasan LIKE '%Terlalu banyak permintaan%'
+    THEN 1 ELSE 0
+  END`;
+}
+
+async function buildChatbotSiswaQueryParts(user, query = {}) {
+  const columns = await getChatHistoryColumns();
+  const hasInstrumenColumn = columns.has('instrumen_id');
+  const hasIsErrorColumn = columns.has('is_error');
+  const errorExpression = getChatbotErrorExpression(hasIsErrorColumn);
+  const instrumenIdExpression = hasInstrumenColumn ? 'ch.instrumen_id' : 'NULL';
+  const instrumenJoin = hasInstrumenColumn
+    ? 'LEFT JOIN instrumen i ON i.id = ch.instrumen_id'
+    : 'LEFT JOIN instrumen i ON 1 = 0';
+
+  const where = ['siswa.peran = "siswa"'];
+  const params = [];
+
+  if (isSuperAdmin(user) || isAdminSekolah(user)) {
+    const scope = appendSekolahScope(where, params, user, 'siswa.id_sekolah', query.id_sekolah);
+    if (!scope.ok) return { ok: false };
+  } else if (isGuru(user)) {
+    if (!hasInstrumenColumn) {
+      return {
+        ok: true,
+        hasInstrumenColumn,
+        hasIsErrorColumn,
+        fromSql: `
+          FROM chat_history ch
+          JOIN users siswa ON siswa.id = ch.user_id
+          ${instrumenJoin}
+        `,
+        where: ['1 = 0'],
+        params: [],
+        errorExpression,
+        instrumenIdExpression
+      };
+    }
+
+    where.push('i.dibuat_oleh = ?');
+    params.push(user.id);
+    where.push('siswa.id_sekolah = ?');
+    params.push(user.id_sekolah);
+  } else {
+    return { ok: false };
+  }
+
+  const dateStart = normalizeDateOnly(firstQueryValue(query, ['tanggal_mulai', 'start', 'date_from', 'dari']));
+  const dateEnd = normalizeDateOnly(firstQueryValue(query, ['tanggal_selesai', 'end', 'date_to', 'sampai']));
+  const kelas = String(query.kelas || '').trim();
+  const instrumenId = parseId(query.instrumen_id || query.id_instrumen);
+  const siswaId = parseId(query.siswa_id || query.id_siswa);
+  const status = normalizeChatbotStatus(query.status);
+  const search = String(query.search || query.q || '').trim();
+
+  if (dateStart) {
+    where.push('DATE(ch.created_at) >= ?');
+    params.push(dateStart);
+  }
+
+  if (dateEnd) {
+    where.push('DATE(ch.created_at) <= ?');
+    params.push(dateEnd);
+  }
+
+  if (kelas) {
+    where.push('siswa.kelas = ?');
+    params.push(kelas);
+  }
+
+  if (instrumenId && hasInstrumenColumn) {
+    where.push('ch.instrumen_id = ?');
+    params.push(instrumenId);
+  }
+
+  if (siswaId) {
+    where.push('siswa.id = ?');
+    params.push(siswaId);
+  }
+
+  if (status === 'success') {
+    where.push(`${errorExpression} = 0`);
+  } else if (status === 'error') {
+    where.push(`${errorExpression} = 1`);
+  }
+
+  if (search) {
+    where.push('(ch.pesan LIKE ? OR ch.balasan LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  const fromSql = `
+    FROM chat_history ch
+    JOIN users siswa ON siswa.id = ch.user_id
+    ${instrumenJoin}
+  `;
+
+  return {
+    ok: true,
+    hasInstrumenColumn,
+    hasIsErrorColumn,
+    fromSql,
+    where,
+    params,
+    errorExpression,
+    instrumenIdExpression
+  };
+}
+
+function buildChatbotStatus(isError) {
+  return Number(isError || 0) === 1 ? 'error' : 'berhasil';
+}
+
+function normalizeQuestionText(text = '') {
+  const stopWords = new Set([
+    'apa', 'itu', 'yang', 'dimaksud', 'jelaskan', 'pengertian', 'maksud',
+    'adalah', 'dari', 'tentang', 'tolong', 'coba', 'dong', 'sih', 'ya',
+    'bagaimana', 'gimana', 'sebutkan', 'contoh', 'materi', 'mengenai'
+  ]);
+
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .map(word => word.trim())
+    .filter(word => word && !stopWords.has(word))
+    .join(' ')
+    .trim();
+}
+
+function questionTokens(text = '') {
+  return new Set(normalizeQuestionText(text).split(/\s+/).filter(Boolean));
+}
+
+function questionSimilarity(a = '', b = '') {
+  const left = questionTokens(a);
+  const right = questionTokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let intersection = 0;
+  left.forEach(token => {
+    if (right.has(token)) intersection += 1;
+  });
+
+  const union = new Set([...left, ...right]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
 // GET /api/laporan/super-admin-dashboard - ringkasan global lintas sekolah
 router.get('/super-admin-dashboard', authenticate, async (req, res) => {
   try {
@@ -528,6 +722,304 @@ router.get('/dashboard-full', authenticate, authorize('admin', 'guru'), async (r
       success: false,
       message: 'Terjadi kesalahan server.'
     });
+  }
+});
+
+// GET /api/laporan/chatbot-siswa - rekapan pertanyaan chatbot siswa
+router.get('/chatbot-siswa', authenticate, authorize('admin', 'guru'), async (req, res) => {
+  try {
+    const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
+    if (!parts.ok) return denyAccess(res);
+
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(5, Number.parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+    const where = whereSql(parts.where);
+
+    const [countRows, rows, kelasRows, instrumenRows, siswaRows] = await Promise.all([
+      pool.execute(
+        `SELECT COUNT(*) as total ${parts.fromSql} ${where}`,
+        parts.params
+      ).then(result => result[0]),
+      pool.execute(
+        `SELECT
+           ch.id,
+           siswa.id as siswa_id,
+           siswa.nama as nama_siswa,
+           siswa.kelas,
+           ${parts.instrumenIdExpression} as instrumen_id,
+           i.judul as instrumen_judul,
+           i.mata_pelajaran,
+           i.jenis as jenis_instrumen,
+           ch.pesan as pertanyaan,
+           ch.balasan as jawaban_chatbot,
+           ${parts.errorExpression} as is_error,
+           ch.created_at
+         ${parts.fromSql}
+         ${where}
+         ORDER BY ch.created_at DESC, ch.id DESC
+         LIMIT ? OFFSET ?`,
+        [...parts.params, limit, offset]
+      ).then(result => result[0]),
+      pool.execute(
+        `SELECT DISTINCT siswa.kelas
+         ${parts.fromSql}
+         ${where}
+         ORDER BY siswa.kelas ASC`,
+        parts.params
+      ).then(result => result[0]).catch(() => []),
+      pool.execute(
+        `SELECT DISTINCT ${parts.instrumenIdExpression} as id, i.judul
+         ${parts.fromSql}
+         ${where}
+         AND i.id IS NOT NULL
+         ORDER BY i.judul ASC`,
+        parts.params
+      ).then(result => result[0]).catch(() => []),
+      pool.execute(
+        `SELECT DISTINCT siswa.id, siswa.nama, siswa.kelas
+         ${parts.fromSql}
+         ${where}
+         ORDER BY siswa.nama ASC`,
+        parts.params
+      ).then(result => result[0]).catch(() => [])
+    ]);
+
+    const total = numberValue(countRows[0]?.total);
+
+    return res.json({
+      success: true,
+      data: {
+        items: rows.map(row => ({
+          id: row.id,
+          siswa_id: row.siswa_id,
+          nama_siswa: row.nama_siswa,
+          kelas: row.kelas,
+          instrumen_id: row.instrumen_id,
+          instrumen_judul: row.instrumen_judul || null,
+          mata_pelajaran: row.mata_pelajaran || null,
+          jenis_instrumen: row.jenis_instrumen || null,
+          pertanyaan: row.pertanyaan,
+          jawaban_chatbot: row.jawaban_chatbot,
+          is_error: Number(row.is_error || 0),
+          status: buildChatbotStatus(row.is_error),
+          created_at: row.created_at
+        })),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.max(1, Math.ceil(total / limit))
+        },
+        filters: {
+          kelas: kelasRows.map(item => item.kelas).filter(Boolean),
+          instrumen: instrumenRows
+            .filter(item => item.id)
+            .map(item => ({ id: item.id, judul: item.judul })),
+          siswa: siswaRows.map(item => ({
+            id: item.id,
+            nama: item.nama,
+            kelas: item.kelas
+          }))
+        },
+        schema: {
+          has_instrumen_id: parts.hasInstrumenColumn,
+          has_is_error: parts.hasIsErrorColumn
+        }
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Gagal mengambil laporan chatbot siswa.' });
+  }
+});
+
+// GET /api/laporan/chatbot-siswa/top-siswa - siswa paling sering bertanya
+router.get('/chatbot-siswa/top-siswa', authenticate, authorize('admin', 'guru'), async (req, res) => {
+  try {
+    const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
+    if (!parts.ok) return denyAccess(res);
+
+    const [rows] = await pool.execute(
+      `SELECT
+         siswa.id as siswa_id,
+         siswa.nama as nama_siswa,
+         siswa.kelas,
+         ${parts.instrumenIdExpression} as instrumen_id,
+         COALESCE(i.judul, 'Tanpa instrumen') as instrumen_judul,
+         COUNT(*) as jumlah
+       ${parts.fromSql}
+       ${whereSql(parts.where)}
+       GROUP BY siswa.id, siswa.nama, siswa.kelas, ${parts.instrumenIdExpression}, i.judul
+       ORDER BY jumlah DESC, siswa.nama ASC`,
+      parts.params
+    );
+
+    const siswaMap = new Map();
+    rows.forEach(row => {
+      const key = Number(row.siswa_id);
+      if (!siswaMap.has(key)) {
+        siswaMap.set(key, {
+          siswa_id: row.siswa_id,
+          nama_siswa: row.nama_siswa,
+          kelas: row.kelas,
+          jumlah_pertanyaan: 0,
+          instrumen_terbanyak: row.instrumen_judul,
+          instrumen_terbanyak_id: row.instrumen_id || null,
+          _maxInstrumenCount: 0
+        });
+      }
+
+      const item = siswaMap.get(key);
+      const jumlah = numberValue(row.jumlah);
+      item.jumlah_pertanyaan += jumlah;
+      if (jumlah > item._maxInstrumenCount) {
+        item._maxInstrumenCount = jumlah;
+        item.instrumen_terbanyak = row.instrumen_judul;
+        item.instrumen_terbanyak_id = row.instrumen_id || null;
+      }
+    });
+
+    const data = [...siswaMap.values()]
+      .sort((a, b) => b.jumlah_pertanyaan - a.jumlah_pertanyaan || a.nama_siswa.localeCompare(b.nama_siswa))
+      .slice(0, Math.min(20, Number.parseInt(req.query.limit, 10) || 10))
+      .map(({ _maxInstrumenCount, ...item }) => item);
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Gagal mengambil top siswa chatbot.' });
+  }
+});
+
+// GET /api/laporan/chatbot-siswa/top-pertanyaan - kelompok pertanyaan mirip
+router.get('/chatbot-siswa/top-pertanyaan', authenticate, authorize('admin', 'guru'), async (req, res) => {
+  try {
+    const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
+    if (!parts.ok) return denyAccess(res);
+
+    const [rows] = await pool.execute(
+      `SELECT
+         ch.id,
+         ch.pesan as pertanyaan,
+         siswa.id as siswa_id,
+         siswa.nama as nama_siswa,
+         siswa.kelas
+       ${parts.fromSql}
+       ${whereSql(parts.where)}
+       ORDER BY ch.created_at DESC
+       LIMIT 1000`,
+      parts.params
+    );
+
+    const groups = [];
+    rows.forEach(row => {
+      const normalized = normalizeQuestionText(row.pertanyaan);
+      if (!normalized) return;
+
+      let group = groups.find(item => (
+        item.normalized_key === normalized ||
+        questionSimilarity(item.representative_question, row.pertanyaan) >= 0.65
+      ));
+
+      if (!group) {
+        group = {
+          representative_question: row.pertanyaan,
+          normalized_key: normalized,
+          total: 0,
+          siswaMap: new Map(),
+          examples: []
+        };
+        groups.push(group);
+      }
+
+      group.total += 1;
+      group.examples.push(row.pertanyaan);
+      group.siswaMap.set(Number(row.siswa_id), {
+        siswa_id: row.siswa_id,
+        nama_siswa: row.nama_siswa,
+        kelas: row.kelas
+      });
+
+      if (row.pertanyaan.length < group.representative_question.length) {
+        group.representative_question = row.pertanyaan;
+      }
+    });
+
+    const data = groups
+      .sort((a, b) => b.total - a.total)
+      .slice(0, Math.min(20, Number.parseInt(req.query.limit, 10) || 10))
+      .map(group => ({
+        representative_question: group.representative_question,
+        normalized_key: group.normalized_key,
+        total: group.total,
+        siswa: [...group.siswaMap.values()],
+        contoh_pertanyaan: [...new Set(group.examples)].slice(0, 5)
+      }));
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Gagal mengambil top pertanyaan chatbot.' });
+  }
+});
+
+// GET /api/laporan/chatbot-siswa/:id - detail pertanyaan chatbot siswa
+router.get('/chatbot-siswa/:id', authenticate, authorize('admin', 'guru'), async (req, res) => {
+  try {
+    const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
+    if (!parts.ok) return denyAccess(res);
+
+    const chatId = parseId(req.params.id);
+    if (!chatId) {
+      return res.status(400).json({ success: false, message: 'ID chat tidak valid.' });
+    }
+
+    const [rows] = await pool.execute(
+      `SELECT
+         ch.id,
+         siswa.id as siswa_id,
+         siswa.nama as nama_siswa,
+         siswa.kelas,
+         ${parts.instrumenIdExpression} as instrumen_id,
+         i.judul as instrumen_judul,
+         i.mata_pelajaran,
+         i.jenis as jenis_instrumen,
+         ch.pesan as pertanyaan,
+         ch.balasan as jawaban_chatbot,
+         ${parts.errorExpression} as is_error,
+         ch.created_at
+       ${parts.fromSql}
+       ${whereSql([...parts.where, 'ch.id = ?'])}`,
+      [...parts.params, chatId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Data chat tidak ditemukan.' });
+    }
+
+    const row = rows[0];
+    return res.json({
+      success: true,
+      data: {
+        id: row.id,
+        siswa_id: row.siswa_id,
+        nama_siswa: row.nama_siswa,
+        kelas: row.kelas,
+        instrumen_id: row.instrumen_id,
+        instrumen_judul: row.instrumen_judul || null,
+        mata_pelajaran: row.mata_pelajaran || null,
+        jenis_instrumen: row.jenis_instrumen || null,
+        pertanyaan: row.pertanyaan,
+        jawaban_chatbot: row.jawaban_chatbot,
+        is_error: Number(row.is_error || 0),
+        status: buildChatbotStatus(row.is_error),
+        created_at: row.created_at
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Gagal mengambil detail chat siswa.' });
   }
 });
 

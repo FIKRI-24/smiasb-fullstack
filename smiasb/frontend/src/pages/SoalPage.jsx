@@ -46,6 +46,7 @@ const SoalPage = () => {
   const [selectedBankSoalIds, setSelectedBankSoalIds] = useState([]);
   const [usingBankSoal, setUsingBankSoal] = useState(false);
   const [bankSoalDetail, setBankSoalDetail] = useState(null);
+  const [bankSoalAllowCrossClass, setBankSoalAllowCrossClass] = useState(false);
 
   const [form, setForm] = useState({
     pertanyaan: "",
@@ -83,6 +84,13 @@ const SoalPage = () => {
 
   useEffect(() => { fetchData(); }, []);
 
+  const buildDefaultBankSoalFilters = (allowCrossClass = bankSoalAllowCrossClass) => ({
+    ...emptyBankSoalFilters,
+    kelas: allowCrossClass ? "" : (instrumen?.kelas || ""),
+    mata_pelajaran: instrumen?.mata_pelajaran || "",
+    jenis_instrumen: instrumen?.jenis || "",
+  });
+
   const fetchBankSoal = async (pageValue = bankSoalPage, filtersValue = appliedBankSoalFilters) => {
     setBankSoalLoading(true);
     setBankSoalError("");
@@ -111,6 +119,12 @@ const SoalPage = () => {
   }, [showBankSoalModal, bankSoalPage, appliedBankSoalFilters]);
 
   const openBankSoalModal = () => {
+    const defaultFilters = buildDefaultBankSoalFilters(false);
+    setBankSoalAllowCrossClass(false);
+    setBankSoalFilters(defaultFilters);
+    setAppliedBankSoalFilters(defaultFilters);
+    setBankSoalPage(1);
+    setSelectedBankSoalIds([]);
     setShowBankSoalModal(true);
     setBankSoalError("");
     setBankSoalDetail(null);
@@ -127,14 +141,43 @@ const SoalPage = () => {
     setBankSoalFilters(prev => ({ ...prev, [field]: value }));
   };
 
-  const applyBankSoalFilters = () => {
+  const handleBankSoalCrossClassChange = (checked) => {
+    setBankSoalAllowCrossClass(checked);
+    setSelectedBankSoalIds([]);
+    setBankSoalDetail(null);
     setBankSoalPage(1);
-    setAppliedBankSoalFilters({ ...bankSoalFilters });
+    setBankSoalFilters(prev => ({
+      ...prev,
+      kelas: checked ? "" : (instrumen?.kelas || ""),
+      mata_pelajaran: instrumen?.mata_pelajaran || prev.mata_pelajaran,
+      jenis_instrumen: instrumen?.jenis || prev.jenis_instrumen,
+    }));
+    setAppliedBankSoalFilters(prev => ({
+      ...prev,
+      kelas: checked ? "" : (instrumen?.kelas || ""),
+      mata_pelajaran: instrumen?.mata_pelajaran || prev.mata_pelajaran,
+      jenis_instrumen: instrumen?.jenis || prev.jenis_instrumen,
+    }));
+  };
+
+  const applyBankSoalFilters = () => {
+    const nextFilters = {
+      ...bankSoalFilters,
+      kelas: bankSoalAllowCrossClass ? bankSoalFilters.kelas : (instrumen?.kelas || ""),
+      mata_pelajaran: instrumen?.mata_pelajaran || bankSoalFilters.mata_pelajaran,
+      jenis_instrumen: instrumen?.jenis || bankSoalFilters.jenis_instrumen,
+    };
+    setBankSoalFilters(nextFilters);
+    setBankSoalPage(1);
+    setSelectedBankSoalIds([]);
+    setAppliedBankSoalFilters(nextFilters);
   };
 
   const resetBankSoalFilters = () => {
-    setBankSoalFilters(emptyBankSoalFilters);
-    setAppliedBankSoalFilters(emptyBankSoalFilters);
+    const defaultFilters = buildDefaultBankSoalFilters(bankSoalAllowCrossClass);
+    setBankSoalFilters(defaultFilters);
+    setAppliedBankSoalFilters(defaultFilters);
+    setSelectedBankSoalIds([]);
     setBankSoalPage(1);
   };
 
@@ -154,15 +197,21 @@ const SoalPage = () => {
     setBankSoalError("");
 
     try {
-      const res = await bankSoalAPI.useToInstrumen(instrumenId, selectedBankSoalIds);
+      const res = await bankSoalAPI.useToInstrumen(instrumenId, selectedBankSoalIds, {
+        allow_cross_class: bankSoalAllowCrossClass,
+      });
       const added = res.data.added_count || 0;
       const skipped = res.data.skipped_count || 0;
+      const crossClassCount = res.data.cross_class_count || 0;
 
       if (added > 0) {
         toast.success(skipped > 0
           ? `${added} soal ditambahkan, ${skipped} soal dilewati.`
           : `${added} soal berhasil ditambahkan dari Bank Soal.`
         );
+        if (crossClassCount > 0) {
+          toast(res.data.warning || `${crossClassCount} soal dari kelas berbeda ditambahkan.`);
+        }
       } else {
         toast.error(res.data.message || "Tidak ada soal baru yang ditambahkan.");
       }
@@ -1544,6 +1593,25 @@ Yakin ingin mengaktifkan instrumen ini?`,
               </button>
             </div>
 
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12,
+                fontSize: 13,
+                cursor: 'pointer'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={bankSoalAllowCrossClass}
+                onChange={(event) => handleBankSoalCrossClassChange(event.target.checked)}
+                disabled={usingBankSoal}
+              />
+              <span>Tampilkan soal dari kelas lain</span>
+            </label>
+
             <div className="bank-soal-picker-filters">
               <label>
                 Search pertanyaan
@@ -1561,6 +1629,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   className="input"
                   value={bankSoalFilters.kelas}
                   onChange={(event) => handleBankSoalFilterChange('kelas', event.target.value)}
+                  disabled={!bankSoalAllowCrossClass}
                   placeholder="Contoh: VIII-A"
                 />
               </label>
@@ -1570,6 +1639,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   className="input"
                   value={bankSoalFilters.mata_pelajaran}
                   onChange={(event) => handleBankSoalFilterChange('mata_pelajaran', event.target.value)}
+                  disabled
                   placeholder="IPA, Matematika..."
                 />
               </label>
@@ -1579,6 +1649,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   className="select"
                   value={bankSoalFilters.jenis_instrumen}
                   onChange={(event) => handleBankSoalFilterChange('jenis_instrumen', event.target.value)}
+                  disabled
                 >
                   <option value="">Semua jenis</option>
                   {bankSoalJenisOptions.map(item => <option key={item} value={item}>{item}</option>)}

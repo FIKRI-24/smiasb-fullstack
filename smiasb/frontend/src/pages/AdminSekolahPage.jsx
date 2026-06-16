@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import { confirmToast, toast } from '../utils/notify'
 
 const emptyForm = {
   nama: '',
@@ -170,13 +171,19 @@ export default function AdminSekolahPage() {
     const nextStatus = admin.is_aktif ? 'nonaktif' : 'aktif'
     const actionText = nextStatus === 'aktif' ? 'mengaktifkan' : 'menonaktifkan'
 
-    if (!window.confirm(`Yakin ${actionText} akun ${admin.nama}?`)) return
+    const ok = await confirmToast(`Akun ${admin.nama} akan ${actionText === 'mengaktifkan' ? 'diaktifkan' : 'dinonaktifkan'}.`, {
+      title: nextStatus === 'aktif' ? 'Aktifkan Admin Sekolah' : 'Nonaktifkan Admin Sekolah',
+      confirmText: nextStatus === 'aktif' ? 'Aktifkan' : 'Nonaktifkan',
+      tone: nextStatus === 'aktif' ? 'primary' : 'danger',
+    })
+    if (!ok) return
 
     try {
       await superAdminAPI.updateAdminSekolahStatus(admin.id_user, nextStatus)
+      toast.success('Status admin sekolah berhasil diperbarui.')
       await fetchData()
     } catch (err) {
-      alert(err.response?.data?.message || 'Gagal memperbarui status admin sekolah.')
+      toast.error(err.response?.data?.message || 'Gagal memperbarui status admin sekolah.')
     }
   }
 

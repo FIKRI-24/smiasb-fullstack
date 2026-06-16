@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI } from '../api'
+import { confirmToast, toast } from '../utils/notify'
 
 const emptyForm = {
   nama_sekolah: '',
@@ -112,13 +113,19 @@ export default function SekolahPage() {
     const nextStatus = school.status === 'aktif' ? 'nonaktif' : 'aktif'
     const actionText = nextStatus === 'aktif' ? 'mengaktifkan' : 'menonaktifkan'
 
-    if (!window.confirm(`Yakin ${actionText} ${school.nama_sekolah}?`)) return
+    const ok = await confirmToast(`${school.nama_sekolah} akan ${actionText === 'mengaktifkan' ? 'diaktifkan' : 'dinonaktifkan'}.`, {
+      title: nextStatus === 'aktif' ? 'Aktifkan Sekolah' : 'Nonaktifkan Sekolah',
+      confirmText: nextStatus === 'aktif' ? 'Aktifkan' : 'Nonaktifkan',
+      tone: nextStatus === 'aktif' ? 'primary' : 'danger',
+    })
+    if (!ok) return
 
     try {
       await sekolahAPI.updateStatus(school.id, nextStatus)
+      toast.success('Status sekolah berhasil diperbarui.')
       await fetchSchools()
     } catch (err) {
-      alert(err.response?.data?.message || 'Gagal memperbarui status sekolah.')
+      toast.error(err.response?.data?.message || 'Gagal memperbarui status sekolah.')
     }
   }
 

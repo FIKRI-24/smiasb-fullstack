@@ -8,5 +8,7 @@ npm-debug.log
 yarn-error.log
 backend/uploads/
 backend/uploads/**
+backend/backups/
+backend/backups/**
 frontend/vite-dev*.log
 *.log

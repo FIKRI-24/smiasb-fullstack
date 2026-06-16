@@ -158,10 +158,11 @@ export const bankSoalAPI = {
 
   getDetail: (id, params) => api.get(`/bank-soal/${id}`, { params }),
 
-  useToInstrumen: (instrumenId, bankSoalIds) =>
+  useToInstrumen: (instrumenId, bankSoalIds, options = {}) =>
     api.post('/bank-soal/use', {
       instrumen_id: instrumenId,
       bank_soal_ids: bankSoalIds,
+      ...options,
     }),
 
   delete: (id) => api.delete(`/bank-soal/${id}`),
@@ -181,8 +182,8 @@ export const userAPI = {
 
   toggle: (id) => api.patch(`/users/${id}/toggle`),
 
-  resetPassword: (id, password) =>
-    api.patch(`/users/${id}/reset-password`, { password }),
+  editPassword: (id, password) =>
+    api.patch(`/users/${id}/password`, { password }),
 
   delete: (id) => api.delete(`/users/${id}`),
 };
@@ -249,8 +250,8 @@ export const superAdminAPI = {
 // Chatbot
 // ============================================================
 export const chatbotAPI = {
-  send: (pesan, history) =>
-    api.post('/chatbot/send', { pesan, history }),
+  send: (pesan, history, options = {}) =>
+    api.post('/chatbot/send', { pesan, history, ...options }),
 
   getHistory: () => api.get('/chatbot/history'),
 
@@ -268,4 +269,12 @@ export const laporanAPI = {
   dashboardFull: () => api.get('/laporan/dashboard-full'),
 
   superAdminDashboard: (params) => api.get('/laporan/super-admin-dashboard', { params }),
+
+  chatbotSiswa: (params) => api.get('/laporan/chatbot-siswa', { params }),
+
+  chatbotSiswaTopSiswa: (params) => api.get('/laporan/chatbot-siswa/top-siswa', { params }),
+
+  chatbotSiswaTopPertanyaan: (params) => api.get('/laporan/chatbot-siswa/top-pertanyaan', { params }),
+
+  chatbotSiswaDetail: (id, params) => api.get(`/laporan/chatbot-siswa/${id}`, { params }),
 };

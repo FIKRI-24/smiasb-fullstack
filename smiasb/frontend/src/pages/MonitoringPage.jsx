@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import api from "../api";
 import { sanitizeRichHtml, stripHtml } from "../utils/sanitizeHtml";
+import { toast } from "../utils/notify";
 
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || "http://localhost:5000/api").replace(/\/api\/?$/, "");
 const PASSING_SCORE = 75;
@@ -410,7 +411,7 @@ export default function MonitoringPage() {
       await fetchBelumMengerjakan();
     } catch (err) {
       console.error(err);
-      alert("Gagal memuat data monitoring");
+      toast.error("Gagal memuat data monitoring");
     } finally {
       setLoading(false);
     }
@@ -447,7 +448,7 @@ export default function MonitoringPage() {
   const exportBelumMengerjakan = () => {
     const daftar = belumMengerjakan.daftar_siswa || [];
     if (daftar.length === 0) {
-      alert("Tidak ada data siswa yang belum mengerjakan");
+      toast.error("Tidak ada data siswa yang belum mengerjakan");
       return;
     }
 

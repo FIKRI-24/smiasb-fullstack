@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import api from '../api'
+import { useAuth } from '../context/AuthContext'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
+import { confirmToast } from '../utils/notify'
 
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
+const ANSWER_DRAFT_PREFIX = 'smiasb_answer_draft'
+const ANSWER_DRAFT_VERSION = 1
+const ACTIVE_CHATBOT_INSTRUMENT_KEY = 'smiasb_active_chatbot_instrumen_id'
 
 export default function KerjakanSoalPage() {
   const { instrumenId } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [instrumen, setInstrumen] = useState(null)
   const [soal, setSoal] = useState([])
   const [jawaban, setJawaban] = useState({})
@@ -25,9 +31,179 @@ export default function KerjakanSoalPage() {
   const [waktuHabis, setWaktuHabis] = useState(false)
   const [timerExpired, setTimerExpired] = useState(false)
 
+  const getAnswerDraftKey = () => (
+    user?.id && instrumenId ? `${ANSWER_DRAFT_PREFIX}_${user.id}_${instrumenId}` : ''
+  )
+
+  const isDraftAnswerFilled = (soalItem, value) => {
+    if (!soalItem) return false
+    if (soalItem.tipe_soal === 'ganda_kompleks') {
+      return Array.isArray(value) && value.length > 0
+    }
+    if (soalItem.tipe_soal === 'benar_salah' || soalItem.tipe_soal === 'menjodohkan') {
+      return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+    }
+    return value !== undefined && value !== null && String(value) !== ''
+  }
+
+  const hasDraftableAnswers = (answers = jawaban, soalList = soal) => (
+    Array.isArray(soalList) && soalList.some(item => isDraftAnswerFilled(item, answers?.[item.id]))
+  )
+
+  const buildInitialAnswers = (soalList = []) => {
+    const initialAnswers = {}
+    soalList.forEach(s => {
+      if (s.tipe_soal === 'ganda_kompleks') {
+        initialAnswers[s.id] = []
+      } else if (
+        s.tipe_soal === 'benar_salah' ||
+        s.tipe_soal === 'menjodohkan'
+      ) {
+        initialAnswers[s.id] = {}
+      } else {
+        initialAnswers[s.id] = ''
+      }
+    })
+    return initialAnswers
+  }
+
+  const readAnswerDraft = () => {
+    const key = getAnswerDraftKey()
+    if (!key || typeof window === 'undefined') return null
+
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return null
+      const draft = JSON.parse(raw)
+      if (draft.version !== ANSWER_DRAFT_VERSION || !draft.answers || typeof draft.answers !== 'object') {
+        window.localStorage.removeItem(key)
+        return null
+      }
+      return draft
+    } catch {
+      window.localStorage.removeItem(key)
+      return null
+    }
+  }
+
+  const writeAnswerDraft = (answers = jawaban, soalList = soal) => {
+    const key = getAnswerDraftKey()
+    if (!key || typeof window === 'undefined') return
+
+    try {
+      if (!hasDraftableAnswers(answers, soalList)) {
+        window.localStorage.removeItem(key)
+        return
+      }
+
+      window.localStorage.setItem(key, JSON.stringify({
+        version: ANSWER_DRAFT_VERSION,
+        instrumenId,
+        siswaId: user?.id,
+        savedAt: Date.now(),
+        answers
+      }))
+    } catch {
+      // Draft lokal hanya lapisan pengaman; pengerjaan tetap berjalan walau storage penuh/nonaktif.
+    }
+  }
+
+  const clearAnswerDraft = () => {
+    const key = getAnswerDraftKey()
+    if (!key || typeof window === 'undefined') return
+    window.localStorage.removeItem(key)
+  }
+
+  const mergeAnswersWithDraft = (soalList = [], initialAnswers = {}) => {
+    const draft = readAnswerDraft()
+    const draftAnswers = draft?.answers || {}
+    const merged = { ...initialAnswers }
+
+    soalList.forEach(s => {
+      const draftValue = draftAnswers[s.id] ?? draftAnswers[String(s.id)]
+      if (!isDraftAnswerFilled(s, draftValue)) return
+
+      if (s.tipe_soal === 'ganda_kompleks') {
+        merged[s.id] = Array.isArray(draftValue) ? draftValue : []
+      } else if (s.tipe_soal === 'benar_salah' || s.tipe_soal === 'menjodohkan') {
+        merged[s.id] = draftValue && typeof draftValue === 'object' && !Array.isArray(draftValue)
+          ? draftValue
+          : {}
+      } else {
+        merged[s.id] = String(draftValue)
+      }
+    })
+
+    return merged
+  }
+
   useEffect(() => {
     cekStatusDanAmbilSoal()
   }, [])
+
+  useEffect(() => {
+    if (loading || submitting || hasil || sudahMengerjakan || timerExpired || soal.length === 0) return
+    writeAnswerDraft(jawaban, soal)
+  }, [jawaban, soal, loading, submitting, hasil, sudahMengerjakan, timerExpired, user?.id, instrumenId])
+
+  useEffect(() => {
+    const shouldProtect = (
+      !loading &&
+      !submitting &&
+      !hasil &&
+      !sudahMengerjakan &&
+      !timerExpired &&
+      hasDraftableAnswers(jawaban, soal)
+    )
+
+    const handleBeforeUnload = (event) => {
+      if (!shouldProtect) return
+      writeAnswerDraft(jawaban, soal)
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    const handleDocumentClick = async (event) => {
+      if (!shouldProtect || event.defaultPrevented || event.button !== 0) return
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+
+      const anchor = event.target?.closest?.('a[href]')
+      if (!anchor) return
+
+      const href = anchor.getAttribute('href') || ''
+      if (!href || href.startsWith('#') || anchor.target === '_blank') return
+
+      const targetUrl = new URL(href, window.location.href)
+      const currentUrl = new URL(window.location.href)
+      if (targetUrl.pathname === currentUrl.pathname && targetUrl.search === currentUrl.search) return
+
+      event.preventDefault()
+      writeAnswerDraft(jawaban, soal)
+
+      const ok = await confirmToast('Jawaban Anda sudah disimpan sementara. Yakin ingin keluar dari halaman pengerjaan?', {
+        title: 'Keluar Halaman?',
+        confirmText: 'Keluar',
+        cancelText: 'Tetap di Sini',
+        tone: 'danger',
+      })
+
+      if (!ok) return
+
+      if (targetUrl.origin === currentUrl.origin) {
+        navigate(`${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`)
+      } else {
+        window.location.href = targetUrl.href
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('click', handleDocumentClick, true)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('click', handleDocumentClick, true)
+    }
+  }, [jawaban, soal, loading, submitting, hasil, sudahMengerjakan, timerExpired, user?.id, instrumenId, navigate])
 
   // ========== EFFECT UNTUK COUNTDOWN TIMER ==========
   useEffect(() => {
@@ -614,6 +790,7 @@ export default function KerjakanSoalPage() {
       const resStatus = await api.get(`/soal/status/${instrumenId}`)
       
       if (resStatus.data.data.sudahMengerjakan) {
+        clearAnswerDraft()
         setSudahMengerjakan(true)
         setNilaiLama(resStatus.data.data.nilai)
         setLoading(false)
@@ -648,6 +825,9 @@ export default function KerjakanSoalPage() {
       }
       
       setInstrumen(instrumenData)
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(ACTIVE_CHATBOT_INSTRUMENT_KEY, String(instrumenId))
+      }
       
       const parsedSoal = (dataInstrumen.soal || []).map(s => {
         let pernyataanChecklist = []
@@ -697,21 +877,7 @@ export default function KerjakanSoalPage() {
 
       setSoal(parsedSoal)
       
-      const jawabanAwal = {}
-      parsedSoal.forEach(s => {
-        if (s.tipe_soal === 'ganda_kompleks') {
-          jawabanAwal[s.id] = []
-        } 
-        else if (
-          s.tipe_soal === 'benar_salah' ||
-          s.tipe_soal === 'menjodohkan'
-        ) {
-          jawabanAwal[s.id] = {}
-        } 
-        else {
-          jawabanAwal[s.id] = ''
-        }
-      })
+      const jawabanAwal = mergeAnswersWithDraft(parsedSoal, buildInitialAnswers(parsedSoal))
       setJawaban(jawabanAwal)
       
     } catch (err) {
@@ -812,15 +978,20 @@ export default function KerjakanSoalPage() {
     const belumDijawab = soal.filter(s => !isSoalAnswered(s, jawaban[s.id]))
     
     if (belumDijawab.length > 0 && !isAutoSubmit) {
-      if (!window.confirm(`Masih ada ${belumDijawab.length} soal belum dijawab.\n\nTetap submit?`)) {
-        return
-      }
+      const ok = await confirmToast(`Masih ada ${belumDijawab.length} soal belum dijawab. Tetap submit?`, {
+        title: 'Jawaban Belum Lengkap',
+        confirmText: 'Tetap Submit',
+        tone: 'primary',
+      })
+      if (!ok) return
     }
 
     if (!isAutoSubmit) {
-      const confirmSubmit = window.confirm(
-        'PERINGATAN!\n\nAnda hanya bisa mengerjakan soal ini SATU KALI.\n\nYakin ingin mengumpulkan jawaban?'
-      )
+      const confirmSubmit = await confirmToast('Anda hanya bisa mengerjakan soal ini satu kali. Yakin ingin mengumpulkan jawaban?', {
+        title: 'Kumpulkan Jawaban',
+        confirmText: 'Kumpulkan',
+        tone: 'danger',
+      })
       if (!confirmSubmit) return
     }
 
@@ -838,10 +1009,15 @@ export default function KerjakanSoalPage() {
         jawaban: jawabanArray
       })
       
+      clearAnswerDraft()
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(ACTIVE_CHATBOT_INSTRUMENT_KEY)
+      }
       setHasil(res.data.data)
     } catch (err) {
       console.error(err)
       if (err.response?.status === 403) {
+        clearAnswerDraft()
         setError(err.response?.data?.message)
         setSudahMengerjakan(true)
       } else {

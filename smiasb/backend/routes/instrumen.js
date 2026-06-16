@@ -886,12 +886,14 @@ function validateImportPreviewBeforeSave(soalPreview = []) {
     }
 
     if (tipe === 'sebab_akibat') {
-      const sebabText = htmlPlainText(`${soal.pertanyaan || ''} ${soal.pilihan_a || ''} ${soal.pilihan_b || ''}`);
-      if (!/Pernyataan\s*:|sebab|alasan|karena/i.test(sebabText)) {
-        errors.push(`Soal nomor ${nomor} belum memuat bagian pernyataan/sebab.`);
+      if (!htmlPlainText(soal.pilihan_a || '')) {
+        errors.push(`Soal nomor ${nomor} belum memiliki bagian pernyataan.`);
       }
 
-      if (!hasAD) errors.push(`Soal nomor ${nomor} minimal harus memiliki pilihan A-D.`);
+      if (!htmlPlainText(soal.pilihan_b || '')) {
+        errors.push(`Soal nomor ${nomor} belum memiliki bagian sebab.`);
+      }
+
       if (!soal.jawaban_benar) errors.push(`Soal nomor ${nomor} belum memiliki kunci jawaban.`);
     }
   });
@@ -3891,6 +3893,18 @@ function buildSoalPreviewFromHtml(html, options = {}) {
   return buildSoalPreviewResultFromHtml(html, options).soal_preview;
 }
 function buildPertanyaanSebabAkibat(soal) {
+  const editedPernyataan = sanitizeImportHtmlForSave(soal.pilihan_a || '');
+  const editedSebab = sanitizeImportHtmlForSave(soal.pilihan_b || '');
+
+  if (htmlPlainText(editedPernyataan) && htmlPlainText(editedSebab)) {
+    return [
+      '<p>Bacalah pernyataan berikut ini dengan cermat!</p>',
+      `<p><strong>Pernyataan:</strong><br>${editedPernyataan}</p>`,
+      `<p><strong>SEBAB:</strong><br>${editedSebab}</p>`,
+      '<p>Pilihlah jawaban yang paling tepat dari pernyataan di atas.</p>'
+    ].join('\n');
+  }
+
   const existingPertanyaan = String(soal.pertanyaan || '').trim();
 
   if (/Pernyataan\s*:/i.test(existingPertanyaan) && /\bSEBAB\s*:/i.test(existingPertanyaan)) {
@@ -4968,6 +4982,38 @@ function normalizeKelasSqlExpression(column) {
   ].reduce((expr, dashes) => `REPLACE(${expr}, '${dashes}', '-')`, spacesToDashes);
 }
 
+function normalizeInstrumenTitle(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function findInstrumenWithSameTitleAndClass(executor, idSekolah, kelas, judul, excludeId = null) {
+  const where = [
+    'id_sekolah <=> ?',
+    `${normalizeKelasSqlExpression('kelas')} = ?`,
+    'LOWER(TRIM(judul)) = ?'
+  ];
+  const params = [
+    idSekolah,
+    normalizeKelas(kelas),
+    normalizeInstrumenTitle(judul)
+  ];
+
+  if (excludeId) {
+    where.push('id <> ?');
+    params.push(excludeId);
+  }
+
+  const [rows] = await executor.execute(
+    `SELECT id, judul, kelas
+     FROM instrumen
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+
+  return rows[0] || null;
+}
+
 // ============================================================
 // GET /api/instrumen — daftar semua instrumen
 // ============================================================
@@ -5211,6 +5257,19 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('file')
     if (!targetSekolah.ok) return denyAccess(res);
 
     const normalizedInstrumenKelas = normalizeKelas(kelas);
+    const existingSameTitleClass = await findInstrumenWithSameTitleAndClass(
+      pool,
+      targetSekolah.id_sekolah,
+      normalizedInstrumenKelas,
+      judul
+    );
+
+    if (existingSameTitleClass) {
+      return res.status(409).json({
+        success: false,
+        message: 'Instrumen dengan judul dan kelas yang sama sudah ada.'
+      });
+    }
 
     const [result] = await pool.execute(
       `INSERT INTO instrumen (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
@@ -5279,15 +5338,20 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       });
     }
 
-    const [similarRows] = await pool.execute(
-      `SELECT id
-       FROM instrumen
-       WHERE id_sekolah <=> ?
-         AND ${normalizeKelasSqlExpression('kelas')} = ?
-         AND judul = ?
-       LIMIT 1`,
-      [instrumenAsal.id_sekolah, kelasTujuan, judulBaru]
+    const existingSameTitleClass = await findInstrumenWithSameTitleAndClass(
+      pool,
+      instrumenAsal.id_sekolah,
+      kelasTujuan,
+      judulBaru,
+      instrumenAsal.id
     );
+
+    if (existingSameTitleClass) {
+      return res.status(409).json({
+        success: false,
+        message: 'Instrumen dengan judul dan kelas tujuan yang sama sudah ada.'
+      });
+    }
 
     conn = await pool.getConnection();
     await conn.beginTransaction();
@@ -5296,6 +5360,17 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC, id ASC',
       [instrumenAsal.id]
     );
+
+    if (soalAsalRows.length === 0) {
+      await conn.rollback();
+      conn.release();
+      conn = null;
+
+      return res.status(400).json({
+        success: false,
+        message: 'Instrumen asal belum memiliki soal. Tambahkan soal terlebih dahulu sebelum digunakan untuk kelas lain.'
+      });
+    }
 
     const targetJumlahSoal = Number(instrumenAsal.jumlah_soal || soalAsalRows.length || 0);
 
@@ -5382,7 +5457,7 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
         acak_soal: acakSoal,
         bank_soal_added: bankSoalSync?.added || 0,
         bank_soal_skipped: bankSoalSync?.skipped || 0,
-        warning: similarRows.length > 0 ? 'Instrumen serupa sudah ada untuk kelas ini.' : null
+        warning: null
       },
       warning: bankSoalWarning
     });
@@ -5443,6 +5518,21 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
       kelas !== undefined && kelas !== null && String(kelas).trim() !== ''
         ? normalizeKelas(kelas)
         : existing[0].kelas;
+    const nextJudul = judul || existing[0].judul;
+    const existingSameTitleClass = await findInstrumenWithSameTitleAndClass(
+      pool,
+      existing[0].id_sekolah,
+      normalizedInstrumenKelas,
+      nextJudul,
+      req.params.id
+    );
+
+    if (existingSameTitleClass) {
+      return res.status(409).json({
+        success: false,
+        message: 'Instrumen dengan judul dan kelas yang sama sudah ada.'
+      });
+    }
 
     await pool.execute(
       `UPDATE instrumen SET 

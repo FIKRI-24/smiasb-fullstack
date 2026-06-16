@@ -4,6 +4,7 @@ import { BookOpenCheck, Eye, RefreshCcw, Search, Trash2 } from 'lucide-react'
 import { bankSoalAPI, sekolahAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
+import { confirmToast, toast } from '../utils/notify'
 
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
 
@@ -411,7 +412,11 @@ export default function BankSoalPage() {
   }
 
   const handleDelete = async (item) => {
-    const ok = window.confirm('Nonaktifkan soal ini dari Bank Soal? Data tidak akan dihapus permanen.')
+    const ok = await confirmToast('Data tidak akan dihapus permanen.', {
+      title: 'Nonaktifkan Soal Bank Soal',
+      confirmText: 'Nonaktifkan',
+      tone: 'danger',
+    })
     if (!ok) return
 
     setDeletingId(item.id)
@@ -420,9 +425,11 @@ export default function BankSoalPage() {
     try {
       await bankSoalAPI.delete(item.id)
       if (detail?.id === item.id) closeDetail()
+      toast.success('Soal berhasil dinonaktifkan dari Bank Soal.')
       fetchData()
     } catch (err) {
       setError(err.response?.data?.message || 'Soal Bank Soal gagal dinonaktifkan.')
+      toast.error(err.response?.data?.message || 'Soal Bank Soal gagal dinonaktifkan.')
     } finally {
       setDeletingId(null)
     }

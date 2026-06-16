@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const { canAccessInstrumen, isInstrumenOpenForWork, isSiswa } = require('../utils/accessControl');
 
 // ================================
 // 🔑 API KEY GEMINI
@@ -15,6 +16,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // Bisa dioverride lewat GEMINI_MODEL di .env
 // ================================
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+let chatHistoryColumnsCache = null;
 
 // ================================
 // 🧠 SYSTEM PROMPT
@@ -27,12 +29,15 @@ Tugasmu:
 3. Memberikan contoh soal HOTS, Literasi, atau Numerasi bila diminta
 4. Membantu memahami kurikulum Merdeka terkait asesmen
 5. Menjawab pertanyaan seputar pembelajaran di SMP
-6. Menjawab pertanyaan umum lainnya dengan ramah dan membantu
+6. Mengarahkan pertanyaan di luar pendidikan kembali ke konteks pembelajaran, instrumen, asesmen, atau penggunaan SMIA
 
 Aturan menjawab:
 - Gunakan bahasa Indonesia yang ramah, sopan, dan mudah dipahami
 - Jawaban singkat dan padat (2-5 kalimat), kecuali jika pengguna meminta penjelasan panjang
-- Jika tidak tahu, akui dengan jujur dan sarankan mencari sumber lain`;
+- Jika tidak tahu, akui dengan jujur dan sarankan mencari sumber lain
+- Jangan memberikan jawaban, kunci jawaban, atau isi spesifik soal dari Bank Soal/instrumen yang tersimpan di sistem
+- Jika pengguna meminta isi/kunci soal yang tersimpan, tolak dengan sopan dan arahkan untuk belajar konsep, latihan soal baru, atau cara menggunakan fitur secara benar
+- Jika pertanyaan tidak berkaitan dengan pendidikan, jawab singkat bahwa kamu fokus pada pembelajaran lalu tawarkan bantuan seputar HOTS, Literasi, Numerasi, instrumen, atau Bank Soal`;
 
 
 // ================================
@@ -40,6 +45,24 @@ Aturan menjawab:
 // Deteksi maksud pengguna sebelum dikirim ke AI
 // ================================
 const intents = [
+  {
+    name: 'petunjuk_siswa',
+    patterns: [
+      /petunjuk.*(siswa|penggunaan sistem|sistem)/i,
+      /panduan.*(siswa|penggunaan sistem|sistem)/i,
+      /cara.*(pakai|menggunakan).*(sistem|smia|smiasb)/i,
+      /mulai.*sebagai siswa/i
+    ],
+    response: () => [
+      'Berikut petunjuk penggunaan sistem untuk siswa:',
+      '1. Masuk menggunakan akun siswa yang sudah terdaftar.',
+      '2. Buka menu Instrumen untuk melihat daftar instrumen aktif sesuai kelas Anda.',
+      '3. Pilih instrumen yang tersedia, lalu baca judul, mata pelajaran, dan informasi pengerjaan.',
+      '4. Klik kerjakan, jawab setiap soal dengan teliti, dan periksa kembali sebelum mengumpulkan.',
+      '5. Setelah submit, ikuti arahan guru untuk melihat pembahasan atau tindak lanjut.',
+      'Jika bingung pada materi, tanyakan konsepnya kepada saya tanpa meminta kunci jawaban soal.'
+    ].join('\n')
+  },
   {
     name: 'salam',
     patterns: [/^(halo|hai|hi|hello|selamat pagi|selamat siang|selamat sore|selamat malam|assalamualaikum|assalam)/i],
@@ -82,6 +105,73 @@ function detectIntent(pesan) {
   return { matched: false, response: null };
 }
 
+function isBankSoalLeakRequest(pesan = '') {
+  const text = pesan.toLowerCase();
+  const mentionsStoredQuestion = /(bank soal|soal.*tersimpan|instrumen.*tersimpan|soal.*di sistem|soal.*kelas|soal.*ujian|soal.*aktif)/i.test(text);
+  const asksAnswer = /(jawaban|kunci|pembahasan|isi soal|bocorkan|lihat soal|tampilkan soal|nomor berapa|pilihan yang benar|benar nya|benarnya)/i.test(text);
+
+  return mentionsStoredQuestion && asksAnswer;
+}
+
+function isLikelyEducationTopic(pesan = '') {
+  const text = pesan.toLowerCase();
+  return /(belajar|pendidikan|sekolah|siswa|guru|materi|pelajaran|matematika|bahasa indonesia|bahasa inggris|ipa|ips|pkn|agama|seni budaya|pjok|prakarya|hots|literasi|numerasi|asesmen|assessment|instrumen|soal|bank soal|kurikulum|merdeka|nilai|kelas|ujian|tugas|smia|smiasb|cara pakai|penggunaan sistem)/i.test(text);
+}
+
+function isSmallTalk(pesan = '') {
+  return /^(halo|hai|hi|hello|selamat|assalam|terima kasih|makasih|thanks|bye|dadah)/i.test(pesan.trim());
+}
+
+function getOutOfScopeResponse() {
+  return 'Saya fokus membantu pembelajaran dan penggunaan sistem SMIA. Mari kita arahkan ke hal pendidikan: saya bisa bantu menjelaskan HOTS, Literasi, Numerasi, cara membuat atau mengerjakan instrumen, serta penggunaan Bank Soal tanpa membocorkan isi/kunci soal yang tersimpan.';
+}
+
+function getBankSoalSafeResponse() {
+  return 'Maaf, saya tidak bisa menampilkan isi, kunci jawaban, atau jawaban dari Bank Soal/instrumen yang tersimpan. Saya bisa membantu menjelaskan konsep materinya, memberi contoh soal baru yang setara, atau memandu cara menggunakan fitur Bank Soal dengan benar.';
+}
+
+async function getChatHistoryColumns() {
+  if (chatHistoryColumnsCache) return chatHistoryColumnsCache;
+
+  const [columns] = await pool.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_history'`
+  );
+
+  chatHistoryColumnsCache = new Set(columns.map(column => column.COLUMN_NAME));
+  return chatHistoryColumnsCache;
+}
+
+function isChatbotErrorResponse(text = '') {
+  return /kesalahan|gagal terhubung|bermasalah|tidak valid|terlalu banyak permintaan|api key/i.test(String(text || ''));
+}
+
+async function resolveChatInstrumenId(user, rawInstrumenId) {
+  const instrumenId = Number(rawInstrumenId || 0);
+  if (!isSiswa(user)) return null;
+
+  if (Number.isInteger(instrumenId) && instrumenId > 0) {
+    const access = await canAccessInstrumen(user, instrumenId, 'view');
+    if (access.ok) return instrumenId;
+  }
+
+  if (!user?.id_sekolah || !user?.kelas) return null;
+
+  const [rows] = await pool.execute(
+    `SELECT *
+     FROM instrumen
+     WHERE id_sekolah = ?
+       AND kelas = ?
+       AND status = 'aktif'
+     ORDER BY created_at DESC
+     LIMIT 5`,
+    [user.id_sekolah, user.kelas]
+  );
+
+  const openRows = rows.filter(isInstrumenOpenForWork);
+  return openRows.length === 1 ? openRows[0].id : null;
+}
 
 // ================================
 // 🔧 NLP: Proses kalimat promtp AI
@@ -183,7 +273,7 @@ async function callGeminiAI(pesan, history = []) {
 // 💬 POST /send — Kirim pesan ke chatbot
 // ================================
 router.post('/send', authenticate, async (req, res) => {
-  const { pesan, history = [] } = req.body;
+  const { pesan, history = [], instrumen_id } = req.body;
 
   if (!pesan || pesan.trim() === '') {
     return res.status(400).json({
@@ -207,6 +297,10 @@ router.post('/send', authenticate, async (req, res) => {
     const intentResult = detectIntent(pesanAsli);
     if (intentResult.matched) {
       balasan = intentResult.response;
+    } else if (isBankSoalLeakRequest(pesanAsli)) {
+      balasan = getBankSoalSafeResponse();
+    } else if (!isLikelyEducationTopic(pesanAsli) && !isSmallTalk(pesanAsli)) {
+      balasan = getOutOfScopeResponse();
     } else {
       // ── LANGKAH 2: Preprocessing teks ──
       const pesanBersih = preprocessTeks(pesanAsli);
@@ -216,10 +310,30 @@ router.post('/send', authenticate, async (req, res) => {
     }
 
     // ── LANGKAH 4: Simpan ke database ──
-    await pool.execute(
-      'INSERT INTO chat_history (user_id, pesan, balasan, created_at) VALUES (?, ?, ?, NOW())',
-      [req.user.id, pesanAsli, balasan]
-    );
+    const columns = await getChatHistoryColumns();
+    const hasInstrumenColumn = columns.has('instrumen_id');
+    const hasIsErrorColumn = columns.has('is_error');
+    const chatInstrumenId = hasInstrumenColumn
+      ? await resolveChatInstrumenId(req.user, instrumen_id)
+      : null;
+    const isError = isChatbotErrorResponse(balasan) ? 1 : 0;
+
+    if (hasInstrumenColumn && hasIsErrorColumn) {
+      await pool.execute(
+        'INSERT INTO chat_history (user_id, instrumen_id, pesan, balasan, is_error, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+        [req.user.id, chatInstrumenId, pesanAsli, balasan, isError]
+      );
+    } else if (hasInstrumenColumn) {
+      await pool.execute(
+        'INSERT INTO chat_history (user_id, instrumen_id, pesan, balasan, created_at) VALUES (?, ?, ?, ?, NOW())',
+        [req.user.id, chatInstrumenId, pesanAsli, balasan]
+      );
+    } else {
+      await pool.execute(
+        'INSERT INTO chat_history (user_id, pesan, balasan, created_at) VALUES (?, ?, ?, NOW())',
+        [req.user.id, pesanAsli, balasan]
+      );
+    }
 
     return res.json({
       success: true,

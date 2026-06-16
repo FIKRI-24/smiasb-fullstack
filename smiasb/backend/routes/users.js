@@ -19,7 +19,7 @@ const fs = require('fs'); // Tambahan untuk hapus file lama
 
 async function getUserForAccess(id) {
   const [rows] = await pool.execute(
-    'SELECT id, id_sekolah, foto FROM users WHERE id = ?',
+    'SELECT id, id_sekolah, peran, foto FROM users WHERE id = ?',
     [id]
   );
 
@@ -222,20 +222,36 @@ router.patch('/:id/toggle', authenticate, authorize('admin'), async (req, res) =
   }
 });
 
-router.patch('/:id/reset-password', authenticate, authorize('admin'), async (req, res) => {
-  const newPass = req.body.password || 'Adabiah@123';
+async function updateManagedUserPassword(req, res) {
+  const newPass = String(req.body.password || '').trim();
+
+  if (newPass.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password baru minimal 6 karakter.'
+    });
+  }
+
   try {
     const targetUser = await getUserForAccess(req.params.id);
     if (!targetUser) return res.status(404).json({ success: false, message: 'Pengguna tidak ditemukan.' });
     if (!canAccessUserTarget(req.user, targetUser, false)) return denyAccess(res);
+    if (!['guru', 'siswa'].includes(targetUser.peran)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password hanya dapat diedit untuk akun guru atau siswa.'
+      });
+    }
 
     const hashed = await bcrypt.hash(newPass, 10);
     await pool.execute('UPDATE users SET password = ? WHERE id = ?', [hashed, req.params.id]);
-    return res.json({ success: true, message: `Password direset ke: ${newPass}` });
+    return res.json({ success: true, message: 'Password pengguna berhasil diperbarui.' });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Terjadi kesalahan server.' });
   }
-});
+}
+
+router.patch('/:id/password', authenticate, authorize('admin'), updateManagedUserPassword);
 
 // ============================================================
 // DELETE /api/users/:id (admin)

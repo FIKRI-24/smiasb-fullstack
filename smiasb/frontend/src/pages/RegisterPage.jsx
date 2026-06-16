@@ -1,13 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { authAPI } from '../api'
+import { KELAS } from '../constants/classes'
 import { useAuth } from '../context/AuthContext'
-
-const KELAS_OPTIONS = [
-  'VII-A', 'VII-B', 'VII-C',
-  'VIII-A', 'VIII-B', 'VIII-C', 'VIII-D', 'VIII-E',
-  'IX-A', 'IX-B', 'IX-C'
-]
 
 export default function RegisterPage() {
   const { login } = useAuth()
@@ -98,7 +93,7 @@ export default function RegisterPage() {
                 onChange={event => set('kelas', event.target.value)}
               >
                 <option value="">-- Pilih kelas --</option>
-                {KELAS_OPTIONS.map(kelas => (
+                {KELAS.map(kelas => (
                   <option key={kelas} value={kelas}>{kelas}</option>
                 ))}
               </select>

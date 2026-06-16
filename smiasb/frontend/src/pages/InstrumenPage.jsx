@@ -4,6 +4,7 @@ import { useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { KELAS } from '../constants/classes'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
 import {
   BookOpenCheck,
@@ -34,11 +35,6 @@ import {
 
 const JENIS = ['HOTS','Literasi','Numerasi']
 const STATUS = ['draft','aktif','nonaktif']
-const KELAS = [
-  'VII-A', 'VII-B', 'VII-C',
-  'VIII-A', 'VIII-B', 'VIII-C', 'VIII-D', 'VIII-E',
-  'IX-A', 'IX-B', 'IX-C'
-]
 const MAPEL = ['Matematika','Bahasa Indonesia','Bahasa Inggris','IPA','IPS','PKn','Agama Islam','Seni Budaya','PJOK','Prakarya']
 const jenisColor = { HOTS:'blue', Literasi:'teal', Numerasi:'amber' }
 const statusColor = { aktif:'teal', draft:'amber', nonaktif:'coral' }
@@ -1375,20 +1371,12 @@ const validateImportPreview = (list = []) => {
     }
 
     if (tipe === 'sebab_akibat') {
-      const sebabText = [
-        pertanyaan,
-        stripHtml(sanitizeRichHtml(soal.pilihan_a || '')),
-        stripHtml(sanitizeRichHtml(soal.pilihan_b || ''))
-      ].join(' ')
-
-      if (!/Pernyataan\s*:|sebab|alasan|karena/i.test(sebabText)) {
-        errors.push(`Soal nomor ${nomor} belum memuat bagian pernyataan/sebab.`)
+      if (isHtmlEmpty(soal.pilihan_a || '')) {
+        errors.push(`Soal nomor ${nomor} belum memiliki bagian pernyataan.`)
       }
 
-      const pilihanWajib = PILIHAN_WAJIB_LABELS.filter(label => !isHtmlEmpty(getChoiceText(soal, label)))
-
-      if (pilihanWajib.length < 4) {
-        errors.push(`Soal nomor ${nomor} minimal harus memiliki pilihan A-D.`)
+      if (isHtmlEmpty(soal.pilihan_b || '')) {
+        errors.push(`Soal nomor ${nomor} belum memiliki bagian sebab.`)
       }
 
       if (!soal.jawaban_benar) {
@@ -2724,16 +2712,10 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
     }
 
     if (similarInstrument) {
-      const ok = await confirmToast(
-        'Instrumen serupa sudah ada untuk kelas ini. Lanjutkan membuat salinan?',
-        {
-          title: 'Instrumen serupa sudah ada',
-          confirmText: 'Lanjutkan',
-          cancelText: 'Batal'
-        }
-      )
-
-      if (!ok) return
+      const message = 'Instrumen dengan judul dan kelas yang sama sudah ada.'
+      setDuplicateWarning(message)
+      toast.error(message)
+      return
     }
 
     setDuplicateSaving(true)
