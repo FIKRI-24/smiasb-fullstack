@@ -176,7 +176,8 @@ function stripHtmlForScoring(value = '') {
 function normalizeChoiceAnswer(value, allowed = ['A', 'B', 'C', 'D', 'E']) {
   const text = stripHtmlForScoring(value).toUpperCase();
   const match = text.match(/[A-E]/);
-  return match && allowed.includes(match[0]) ? match[0] : text;
+  if (match) return allowed.includes(match[0]) ? match[0] : null;
+  return allowed.includes(text) ? text : null;
 }
 
 function normalizeChoiceSet(value) {
@@ -301,8 +302,8 @@ function evaluateJawabanSiswa(soalData, jawabanSiswa) {
     }
 
     case 'sebab_akibat': {
-      const kunci = normalizeChoiceAnswer(soalData.jawaban_benar, ['A', 'B', 'C', 'D', 'E']);
-      const jawaban = normalizeChoiceAnswer(jawabanSiswa, ['A', 'B', 'C', 'D', 'E']);
+      const kunci = normalizeChoiceAnswer(soalData.jawaban_benar, ['A', 'B', 'C', 'D']);
+      const jawaban = normalizeChoiceAnswer(jawabanSiswa, ['A', 'B', 'C', 'D']);
       butirBenar = kunci && jawaban && kunci === jawaban ? 1 : 0;
       kunciJawaban = kunci;
       subbagian.push({ siswa: jawaban, kunci, benar: butirBenar === 1 });
@@ -913,9 +914,10 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
       if (!pilihan_a || !pilihan_b) {
         return res.status(400).json({ success: false, message: 'Pernyataan dan sebab wajib diisi' });
       }
-      if (!['A', 'B', 'C', 'D', 'E'].includes(jawaban_benar)) {
-        return res.status(400).json({ success: false, message: 'Jawaban benar harus A/B/C/D/E' });
+      if (!['A', 'B', 'C', 'D'].includes(jawaban_benar)) {
+        return res.status(400).json({ success: false, message: 'Jawaban benar harus A/B/C/D' });
       }
+      pilihan_e = null;
     }
     else if (tipe_soal === 'ganda_kompleks' && (!jawaban_benar_json || JSON.parse(jawaban_benar_json).length === 0)) {
       return res.status(400).json({ success: false, message: 'Pilih minimal satu jawaban benar' });
@@ -993,6 +995,12 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
         if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
       }
       gambar_soal = req.file.filename;
+    } else if (req.body.remove_gambar_soal === 'true' || req.body.remove_gambar_soal === true) {
+      if (gambar_soal) {
+        const oldPath = path.join(getUploadDir('soal'), gambar_soal);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+      gambar_soal = null;
     }
 
     let pasanganMenjodohkan = req.body.pasangan_menjodohkan || existingSoal[0].pasangan_menjodohkan;
@@ -1016,6 +1024,12 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
 
     let jawabanBenarJson = req.body.jawaban_benar_json || existingSoal[0].jawaban_benar_json;
     const tipeUpdate = req.body.tipe_soal || existingSoal[0].tipe_soal;
+    const jawabanBenarUpdate = req.body.jawaban_benar || existingSoal[0].jawaban_benar;
+
+    if (tipeUpdate === 'sebab_akibat' && !['A', 'B', 'C', 'D'].includes(jawabanBenarUpdate)) {
+      return res.status(400).json({ success: false, message: 'Jawaban benar harus A/B/C/D' });
+    }
+
     if (req.body.jawaban_benar_json && tipeUpdate === 'benar_salah') {
       try {
         const parsed = typeof req.body.jawaban_benar_json === 'string'
@@ -1045,8 +1059,8 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
         req.body.pilihan_b || existingSoal[0].pilihan_b,
         req.body.pilihan_c || existingSoal[0].pilihan_c,
         req.body.pilihan_d || existingSoal[0].pilihan_d,
-        req.body.pilihan_e || existingSoal[0].pilihan_e,
-        req.body.jawaban_benar || existingSoal[0].jawaban_benar,
+        tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_e || existingSoal[0].pilihan_e),
+        jawabanBenarUpdate,
         jawabanBenarJson,
         tipeUpdate,
         req.body.kategori_instrumen || existingSoal[0].kategori_instrumen,

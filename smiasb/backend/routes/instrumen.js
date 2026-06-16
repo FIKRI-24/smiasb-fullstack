@@ -892,6 +892,9 @@ function validateImportPreviewBeforeSave(soalPreview = []) {
       }
 
       if (!soal.jawaban_benar) errors.push(`Soal nomor ${nomor} belum memiliki kunci jawaban.`);
+      if (String(soal.jawaban_benar || '').trim().toUpperCase() === 'E') {
+        errors.push(`Soal nomor ${nomor} memiliki kunci E. Tipe sebab-akibat hanya memakai A-D.`);
+      }
     }
   });
 
@@ -3774,8 +3777,14 @@ function buildSoalPreviewResultFromHtml(html, options = {}) {
       hasil.pilihan_b = pilihan[1] || null;
       hasil.pilihan_c = pilihan[2] || null;
       hasil.pilihan_d = pilihan[3] || null;
-      hasil.pilihan_e = pilihan[4] || null;
+      hasil.pilihan_e = tipeSoal === 'sebab_akibat' ? null : (pilihan[4] || null);
       hasil.jawaban_benar = optionData.answer_keys[0] || null;
+
+      if (tipeSoal === 'sebab_akibat' && hasil.jawaban_benar === 'E') {
+        hasil.jawaban_benar = null;
+        addWarning('Kunci E terdeteksi, tetapi tipe sebab-akibat hanya memakai A-D.', 0.62);
+      }
+
       debugExtract.answer_key_found = Boolean(hasil.jawaban_benar);
 
       if (pilihan.length < 4) {
@@ -4000,8 +4009,7 @@ const EXCEL_IMPORT_SOAL_HEADER_ALIASES = {
 
 const SEBAB_AKIBAT_OPTIONS = {
   pilihan_c: 'Pernyataan benar dan alasan salah.',
-  pilihan_d: 'Pernyataan salah dan alasan benar.',
-  pilihan_e: 'Pernyataan salah dan alasan salah.'
+  pilihan_d: 'Pernyataan salah dan alasan benar.'
 };
 
 function normalizeExcelHeader(value = '') {
@@ -4642,13 +4650,21 @@ function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
         message: `Soal nomor ${nomorLabel}: kunci sebab_akibat belum terdeteksi dan perlu dilengkapi manual.`
       });
     }
+    if (key === 'E') {
+      pushExcelIssue(rowErrors, {
+        row: row.__row_number,
+        nomor,
+        field: 'kunci',
+        message: `Soal nomor ${nomorLabel}: kunci sebab_akibat hanya boleh A/B/C/D.`
+      });
+    }
 
     soal.pertanyaan = pertanyaan || 'Bacalah pernyataan berikut ini dengan cermat!';
     soal.pilihan_a = pernyataan;
     soal.pilihan_b = sebab;
     soal.pilihan_c = getExcelHtml(row, 'pilihan_c') || SEBAB_AKIBAT_OPTIONS.pilihan_c;
     soal.pilihan_d = getExcelHtml(row, 'pilihan_d') || SEBAB_AKIBAT_OPTIONS.pilihan_d;
-    soal.pilihan_e = getExcelHtml(row, 'pilihan_e') || SEBAB_AKIBAT_OPTIONS.pilihan_e;
+    soal.pilihan_e = null;
     soal.jawaban_benar = key || null;
 
     if (getExcelHtml(row, 'pilihan_a') || getExcelHtml(row, 'pilihan_b')) {
@@ -6161,7 +6177,9 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
       const pilihanB = stripOptionLabelPrefix(soal.pilihan_b || pilihanArray[1] || '');
       const pilihanC = stripOptionLabelPrefix(soal.pilihan_c || pilihanArray[2] || '');
       const pilihanD = stripOptionLabelPrefix(soal.pilihan_d || pilihanArray[3] || '');
-      const pilihanE = stripOptionLabelPrefix(soal.pilihan_e || pilihanArray[4] || '');
+      const pilihanE = tipeSoal === 'sebab_akibat'
+        ? null
+        : stripOptionLabelPrefix(soal.pilihan_e || pilihanArray[4] || '');
 
       const tabelDataForSave = getQuestionTablesForSave(soal, normalizedImages);
       const tabelData = tabelDataForSave ? safeJsonStringify(tabelDataForSave) : null;

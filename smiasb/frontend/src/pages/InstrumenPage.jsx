@@ -1266,7 +1266,8 @@ const normalizeSoalForType = (soal, tipeSoal) => {
     next.pilihan_b = next.pilihan_b || ''
     next.pilihan_c = next.pilihan_c || 'Pernyataan benar, alasan salah'
     next.pilihan_d = next.pilihan_d || 'Pernyataan salah, alasan benar'
-    next.pilihan_e = next.pilihan_e || 'Pernyataan salah, alasan salah'
+    next.pilihan_e = ''
+    if (next.jawaban_benar === 'E') next.jawaban_benar = ''
   }
 
   if (tipeSoal === 'ganda_kompleks' && !Array.isArray(next.jawaban_benar_json)) {
@@ -1367,6 +1368,10 @@ const validateImportPreview = (list = []) => {
 
       if (!soal.jawaban_benar) {
         errors.push(`Soal nomor ${nomor} belum memiliki kunci jawaban.`)
+      }
+
+      if (soal.jawaban_benar === 'E') {
+        errors.push(`Soal nomor ${nomor} memiliki kunci E. Tipe sebab-akibat hanya memakai A-D.`)
       }
     }
 
@@ -2573,7 +2578,6 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               <option>B. Pernyataan benar, alasan benar, tidak berhubungan</option>
               <option>C. Pernyataan benar, alasan salah</option>
               <option>D. Pernyataan salah, alasan benar</option>
-              <option>E. Pernyataan salah, alasan salah</option>
             </select>
           </div>
         )}
@@ -4176,7 +4180,6 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                         <div><strong>B.</strong> Pernyataan benar, alasan benar, tidak berhubungan</div>
                         <div><strong>C.</strong> Pernyataan benar, alasan salah</div>
                         <div><strong>D.</strong> Pernyataan salah, alasan benar</div>
-                        <div><strong>E.</strong> Pernyataan salah, alasan salah</div>
                       </div>
 
                       <label style={{ fontSize: 13, fontWeight: 700 }}>Kunci Jawaban</label>
@@ -4186,7 +4189,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                         onChange={e => updateImportSoal(index, 'jawaban_benar', e.target.value)}
                       >
                         <option value="">Pilih kunci</option>
-                        {PILIHAN_LABELS.map(label => (
+                        {PILIHAN_WAJIB_LABELS.map(label => (
                           <option key={label} value={label}>{label}</option>
                         ))}
                       </select>

@@ -459,6 +459,22 @@ export default function KerjakanSoalPage() {
     <span dangerouslySetInnerHTML={{ __html: sanitizeQuestionHtml(value) || escapeHtmlText(normalizeVisibleText(value)) }} />
   )
 
+  const isSebabAkibatAnswerTemplate = (value = '') => {
+    const text = stripHtml(String(value || ''))
+      .replace(/\s+/g, ' ')
+      .replace(/^[A-E]\s*[.)-]\s*/i, '')
+      .trim()
+      .toLowerCase()
+
+    return (
+      /^pernyataan benar,?\s+alasan benar\b.*(?:berhubungan|hubungan sebab[-\s]?akibat|menunjukkan hubungan)/i.test(text) ||
+      /^pernyataan benar,?\s+alasan benar\b.*tidak\b.*hubungan/i.test(text) ||
+      /^pernyataan benar,?\s+alasan salah\b/i.test(text) ||
+      /^pernyataan salah,?\s+alasan benar\b/i.test(text) ||
+      /^pernyataan salah,?\s+alasan salah\b/i.test(text)
+    )
+  }
+
   const getMatchingLabel = (opt, index) => {
     if (opt && typeof opt === 'object') {
       return String(opt.label || String.fromCharCode(97 + index)).toLowerCase()
@@ -1143,6 +1159,10 @@ export default function KerjakanSoalPage() {
           const jawabanValue = jawaban[s.id]
           const visibleTabelData = getVisibleTabelData(s)
           const layoutBlocks = getQuestionLayoutBlocks(s, visibleTabelData)
+          const sebabAkibatPernyataan = isSebabAkibatAnswerTemplate(s.pilihan_a) ? '' : (s.pilihan_a || '')
+          const sebabAkibatSebab = isSebabAkibatAnswerTemplate(s.pilihan_b) ? '' : (s.pilihan_b || '')
+          const showSebabAkibatParts =
+            stripHtml(sebabAkibatPernyataan).trim() || stripHtml(sebabAkibatSebab).trim()
           
           return (
             <div key={s.id} className="card" style={{ marginBottom: 16 }}>
@@ -1190,10 +1210,18 @@ export default function KerjakanSoalPage() {
             {/* SEBAB AKIBAT */}
             {s.tipe_soal === 'sebab_akibat' && (
               <div>
-                <div style={{ background: '#F3F4F6', padding: 12, borderRadius: 8, marginBottom: 12 }}>
-                  <div style={{ marginBottom: 8 }}><strong>Pernyataan:</strong> {renderRichInline(s.pilihan_a || '')}</div>
-                  <div><strong>Sebab:</strong> {renderRichInline(s.pilihan_b || '')}</div>
-                </div>
+                {showSebabAkibatParts && (
+                  <div style={{ background: '#F3F4F6', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                    {stripHtml(sebabAkibatPernyataan).trim() && (
+                      <div style={{ marginBottom: stripHtml(sebabAkibatSebab).trim() ? 8 : 0 }}>
+                        <strong>Pernyataan:</strong> {renderRichInline(sebabAkibatPernyataan)}
+                      </div>
+                    )}
+                    {stripHtml(sebabAkibatSebab).trim() && (
+                      <div><strong>Sebab:</strong> {renderRichInline(sebabAkibatSebab)}</div>
+                    )}
+                  </div>
+                )}
                 <select className="select" value={jawabanValue || ''} 
                   onChange={(e) => handleChange(s.id, e.target.value, s.tipe_soal)}
                   style={{ width: '100%', padding: 10 }}>
@@ -1202,7 +1230,6 @@ export default function KerjakanSoalPage() {
                   <option className="option-text" value="B">B. Pernyataan benar, alasan benar, tidak berhubungan</option>
                   <option className="option-text" value="C">C. Pernyataan benar, alasan salah</option>
                   <option className="option-text" value="D">D. Pernyataan salah, alasan benar</option>
-                  <option className="option-text" value="E">E. Pernyataan salah, alasan salah</option>
                 </select>
               </div>
             )}

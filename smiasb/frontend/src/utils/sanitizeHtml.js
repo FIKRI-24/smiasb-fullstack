@@ -25,6 +25,7 @@ const ALLOWED_TAGS = new Set([
 const ALLOWED_STYLES = new Set([
   'color',
   'background-color',
+  'font-weight',
   'text-align',
   'font-size',
   'width',
@@ -60,6 +61,10 @@ const sanitizeStyleValue = (property, value) => {
 
   if (property === 'font-size') {
     return /^(\d{1,2}(\.\d+)?)(px|rem|em|%)$/i.test(raw) ? raw : ''
+  }
+
+  if (property === 'font-weight') {
+    return /^(normal|bold|[1-9]00)$/i.test(raw) ? raw.toLowerCase() : ''
   }
 
   if (property === 'width' || property === 'max-width') {

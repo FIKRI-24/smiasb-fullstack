@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import api, { bankSoalAPI } from "../api";
 import toast from 'react-hot-toast'
 import { sanitizeRichHtml, stripHtml } from "../utils/sanitizeHtml";
@@ -21,6 +22,17 @@ const bankSoalTipeOptions = [
   { value: "menjodohkan", label: "Menjodohkan" },
   { value: "sebab_akibat", label: "Sebab Akibat" },
 ];
+const layoutBlockDefinitions = [
+  { type: 'question', id: 'question', label: 'Pertanyaan' },
+  { type: 'stimulus', id: 'stimulus', label: 'Stimulus Tambahan' },
+  { type: 'image', id: 'images', label: 'Gambar Soal' },
+  { type: 'table', id: 'tables', label: 'Tabel Pendukung' }
+];
+const defaultLayoutBlocks = [{ type: 'question', id: 'question' }];
+const layoutBlockLabelMap = layoutBlockDefinitions.reduce((acc, block) => {
+  acc[block.type] = block.label;
+  return acc;
+}, {});
 
 const SoalPage = () => {
   const { instrumenId } = useParams();
@@ -35,6 +47,9 @@ const SoalPage = () => {
   const [selectedSiswa, setSelectedSiswa] = useState(null);
   const [gambarFile, setGambarFile] = useState(null);
   const [previewGambar, setPreviewGambar] = useState(null);
+  const [removeGambarSoal, setRemoveGambarSoal] = useState(false);
+  const [zoomPreviewImage, setZoomPreviewImage] = useState(null);
+  const [zoomPreviewScale, setZoomPreviewScale] = useState(1);
   const [showBankSoalModal, setShowBankSoalModal] = useState(false);
   const [bankSoalItems, setBankSoalItems] = useState([]);
   const [bankSoalMeta, setBankSoalMeta] = useState({ page: 1, total_pages: 1, total: 0 });
@@ -61,7 +76,7 @@ const SoalPage = () => {
     stimulusBold: false,
     stimulusFontSize: '16px',
     stimulusAlign: 'left',
-    layout_blocks: [{ type: 'question', id: 'question' }],
+    layout_blocks: defaultLayoutBlocks,
     pasangan_menjodohkan: { kolom_kiri: [], kolom_kanan: [], kunci: {} }
   });
 
@@ -232,7 +247,14 @@ const SoalPage = () => {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setForm(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    setForm(prev => {
+      const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
+      if (name === 'tipe_soal' && value === 'sebab_akibat') {
+        next.pilihan_e = '';
+        if (next.jawaban_benar === 'E') next.jawaban_benar = '';
+      }
+      return next;
+    });
   };
 
   const escapeHtml = (value = '') => (
@@ -245,6 +267,8 @@ const SoalPage = () => {
   );
 
   const formatTextForHtml = (value = '') => escapeHtml(String(value || '')).replace(/\r?\n/g, '<br>');
+  const stimulusFontOptions = ['14px', '16px', '18px', '20px', '22px', '24px'];
+  const textAlignOptions = ['left', 'center', 'right', 'justify'];
 
   const parsePlainTextValue = (value = '') => {
     const source = String(value || '');
@@ -254,16 +278,47 @@ const SoalPage = () => {
     return source;
   };
 
+  const parseStyledTextControl = (value = '', defaults = {}) => {
+    const source = String(value || '');
+    const result = {
+      text: parsePlainTextValue(source),
+      bold: Boolean(defaults.bold),
+      fontSize: defaults.fontSize || '16px',
+      align: defaults.align || 'left'
+    };
+
+    if (!/<[a-z][\s\S]*>/i.test(source) || typeof window === 'undefined' || !window.DOMParser) {
+      return result;
+    }
+
+    const doc = new window.DOMParser().parseFromString(source, 'text/html');
+    const elements = Array.from(doc.body.querySelectorAll('*'));
+
+    result.bold = elements.some(el => {
+      const tag = el.tagName.toLowerCase();
+      const weight = String(el.style?.fontWeight || '').toLowerCase();
+      return tag === 'strong' || tag === 'b' || weight === 'bold' || Number(weight) >= 600;
+    });
+
+    const fontEl = elements.find(el => stimulusFontOptions.includes(el.style?.fontSize));
+    if (fontEl) result.fontSize = fontEl.style.fontSize;
+
+    const alignEl = elements.find(el => textAlignOptions.includes(el.style?.textAlign));
+    if (alignEl) result.align = alignEl.style.textAlign;
+
+    return result;
+  };
+
   const buildStyledHtml = (text = '', options = {}) => {
     const content = formatTextForHtml(text);
     if (!content) return '';
     const spanStyles = [];
     if (options.fontSize) spanStyles.push(`font-size: ${options.fontSize}`);
-    if (options.bold) spanStyles.push('font-weight: 700');
 
-    const innerHtml = spanStyles.length
+    const sizedHtml = spanStyles.length
       ? `<span style="${spanStyles.join('; ')}">${content}</span>`
       : content;
+    const innerHtml = options.bold ? `<strong>${sizedHtml}</strong>` : sizedHtml;
 
     const wrapperStyles = [];
     if (options.align) wrapperStyles.push(`text-align: ${options.align}`);
@@ -375,14 +430,134 @@ const SoalPage = () => {
     updateSupportTable(tableIndex, { ...table, rows: nextRows });
   };
 
+  const pasteIntoSupportTable = (event, tableIndex, rowIndex, columnIndex) => {
+    const text = event.clipboardData?.getData('text/plain') || '';
+    if (!text.includes('\t') && !text.includes('\n')) return;
+
+    event.preventDefault();
+
+    const pastedRows = text
+      .replace(/\r/g, '')
+      .replace(/\n$/, '')
+      .split('\n')
+      .map(row => row.split('\t'));
+    const table = form.supporting_tables[tableIndex];
+    if (!table) return;
+
+    const rows = table.rows.map(row => [...row]);
+    pastedRows.forEach((pastedRow, pastedRowIndex) => {
+      const targetRow = rowIndex + pastedRowIndex;
+      if (!rows[targetRow]) rows[targetRow] = Array.from({ length: rows[0]?.length || 2 }, () => '');
+
+      pastedRow.forEach((cell, pastedColumnIndex) => {
+        const targetColumn = columnIndex + pastedColumnIndex;
+        while (rows[targetRow].length <= targetColumn) rows[targetRow].push('');
+        rows[targetRow][targetColumn] = cell;
+      });
+    });
+
+    const maxColumns = Math.max(...rows.map(row => row.length));
+    const normalizedRows = rows.map(row => {
+      const next = [...row];
+      while (next.length < maxColumns) next.push('');
+      return next;
+    });
+
+    updateSupportTable(tableIndex, { ...table, rows: normalizedRows });
+  };
+
+  const pasteIntoChoices = (event, startLabel) => {
+    const text = event.clipboardData?.getData('text/plain') || '';
+    const normalizedText = text.replace(/\r/g, '').replace(/\n$/, '');
+    const lines = normalizedText
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    if (lines.length < 2 && !normalizedText.includes('\t')) return;
+
+    const allowedLabels = form.tipe_soal === 'ganda_kompleks'
+      ? ['A', 'B', 'C', 'D', 'E']
+      : ['A', 'B', 'C', 'D'];
+    const startIndex = allowedLabels.indexOf(String(startLabel || '').toUpperCase());
+    if (startIndex < 0) return;
+
+    const parsedItems = [];
+
+    lines.forEach((line) => {
+      const cells = line.split('\t').map(cell => cell.trim()).filter(Boolean);
+      const source = cells.length > 1 ? cells.join(' ') : line;
+      const labelSource = cells[0] || '';
+      const valueSource = cells.length > 1 ? cells.slice(1).join(' ') : source;
+      const labeledCell = labelSource.match(/^([A-Ea-e])\s*[\.\)]?$/);
+      const labeledLine = source.match(/^([A-Ea-e])\s*[\.\)]\s*(.+)$/);
+
+      if (labeledCell && valueSource) {
+        parsedItems.push({
+          label: labeledCell[1].toUpperCase(),
+          value: valueSource.trim()
+        });
+        return;
+      }
+
+      if (labeledLine) {
+        parsedItems.push({
+          label: labeledLine[1].toUpperCase(),
+          value: labeledLine[2].trim()
+        });
+        return;
+      }
+
+      parsedItems.push({ label: null, value: source.trim() });
+    });
+
+    const nextValues = {};
+    parsedItems.forEach((item, itemIndex) => {
+      const label = item.label || allowedLabels[startIndex + itemIndex];
+      if (!allowedLabels.includes(label) || !item.value) return;
+      nextValues[`pilihan_${label.toLowerCase()}`] = item.value;
+    });
+
+    if (Object.keys(nextValues).length === 0) return;
+
+    event.preventDefault();
+    setForm(prev => ({ ...prev, ...nextValues }));
+  };
+
   const handleGambarChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       setGambarFile(file);
+      setRemoveGambarSoal(false);
       const reader = new FileReader();
       reader.onloadend = () => setPreviewGambar(reader.result);
       reader.readAsDataURL(file);
+      setForm(prev => {
+        const blocks = normalizeManualLayoutBlocks(prev.layout_blocks);
+        return blocks.some(block => block.type === 'image')
+          ? prev
+          : { ...prev, layout_blocks: [...blocks, { type: 'image', id: 'images' }] };
+      });
     }
+  };
+
+  const openPreviewImageZoom = () => {
+    if (!previewGambar) return;
+    setZoomPreviewImage(previewGambar);
+    setZoomPreviewScale(1);
+  };
+
+  const closePreviewImageZoom = () => {
+    setZoomPreviewImage(null);
+    setZoomPreviewScale(1);
+  };
+
+  const zoomPreviewIn = () => {
+    setZoomPreviewScale(prev => Math.min(3, Number((prev + 0.25).toFixed(2))));
+  };
+
+  const zoomPreviewOut = () => {
+    setZoomPreviewScale(prev => Math.max(0.5, Number((prev - 0.25).toFixed(2))));
   };
 
   const isLayoutMetadataTable = (table = {}) => (
@@ -411,6 +586,101 @@ const SoalPage = () => {
     try { return JSON.parse(value); } catch (e) { return null; }
   };
 
+  const normalizeManualLayoutBlocks = (blocks = []) => {
+    const allowed = new Map(layoutBlockDefinitions.map(block => [block.type, block]));
+    const seen = new Set();
+    const normalized = [];
+
+    (Array.isArray(blocks) ? blocks : []).forEach(block => {
+      const type = String(block?.type || '').trim();
+      const definition = allowed.get(type);
+      if (!definition || seen.has(type)) return;
+      seen.add(type);
+      normalized.push({ type, id: block?.id || definition.id });
+    });
+
+    if (!seen.has('question')) normalized.unshift({ type: 'question', id: 'question' });
+
+    return normalized;
+  };
+
+  const isDefaultLayoutOrder = (blocks = []) => (
+    normalizeManualLayoutBlocks(blocks).map(block => block.type).join('|') ===
+    defaultLayoutBlocks.map(block => block.type).join('|')
+  );
+
+  const getLayoutBlockDefinition = (type) => (
+    layoutBlockDefinitions.find(block => block.type === type)
+  );
+
+  const addManualLayoutBlock = (type) => {
+    const definition = getLayoutBlockDefinition(type);
+    if (!definition || type === 'question') return;
+
+    setForm(prev => {
+      const blocks = normalizeManualLayoutBlocks(prev.layout_blocks);
+      if (blocks.some(block => block.type === type)) return prev;
+
+      const next = {
+        ...prev,
+        layout_blocks: [...blocks, { type: definition.type, id: definition.id }]
+      };
+
+      if (type === 'table' && (!Array.isArray(prev.supporting_tables) || prev.supporting_tables.length === 0)) {
+        next.supporting_tables = [createEmptyTable()];
+      }
+
+      return next;
+    });
+
+    if (type === 'image') setRemoveGambarSoal(false);
+  };
+
+  const removeManualLayoutBlock = (type) => {
+    if (type === 'question') return;
+
+    setForm(prev => {
+      const next = {
+        ...prev,
+        layout_blocks: normalizeManualLayoutBlocks(prev.layout_blocks).filter(block => block.type !== type)
+      };
+
+      if (type === 'stimulus') {
+        next.stimulus_tambahan = '';
+        next.stimulusBold = false;
+        next.stimulusFontSize = '16px';
+        next.stimulusAlign = 'left';
+      }
+
+      if (type === 'table') {
+        next.supporting_tables = [];
+      }
+
+      return next;
+    });
+
+    if (type === 'image') {
+      setGambarFile(null);
+      setPreviewGambar(null);
+      setRemoveGambarSoal(Boolean(editingSoal?.gambar_soal));
+    }
+  };
+
+  const moveManualLayoutBlock = (type, direction) => {
+    setForm(prev => {
+      const blocks = normalizeManualLayoutBlocks(prev.layout_blocks);
+      const index = blocks.findIndex(block => block.type === type);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= blocks.length) return prev;
+
+      const nextBlocks = [...blocks];
+      const [moved] = nextBlocks.splice(index, 1);
+      nextBlocks.splice(nextIndex, 0, moved);
+
+      return { ...prev, layout_blocks: nextBlocks };
+    });
+  };
+
   const buildTabelDataWithLayoutMetadata = () => {
     const existingData = parseTabelDataInput(form.tabel_data);
     const supportingTables = Array.isArray(form.supporting_tables) && form.supporting_tables.length > 0
@@ -419,9 +689,7 @@ const SoalPage = () => {
         ? existingData.filter(table => !isLayoutMetadataTable(table))
         : [];
 
-    const blocks = Array.isArray(form.layout_blocks) && form.layout_blocks.length > 0
-      ? form.layout_blocks
-      : [{ type: 'question', id: 'question' }];
+    const blocks = normalizeManualLayoutBlocks(form.layout_blocks);
 
     const stimulusText = parsePlainTextValue(form.stimulus_tambahan);
     const stimulus = buildStyledHtml(stimulusText, {
@@ -430,7 +698,7 @@ const SoalPage = () => {
       align: form.stimulusAlign
     });
     const hasStimulus = stimulusText.trim() !== '';
-    const shouldIncludeLayout = hasStimulus || blocks.some(b => b.type !== 'question') || supportingTables.length > 0;
+    const shouldIncludeLayout = hasStimulus || !isDefaultLayoutOrder(blocks) || supportingTables.length > 0;
 
     const nextTables = supportingTables.map((table) => ({
       ...table,
@@ -452,30 +720,6 @@ const SoalPage = () => {
     }
 
     return nextTables.length > 0 ? JSON.stringify(nextTables) : '';
-  };
-
-  const getLayoutModeFromBlocks = (blocks = []) => {
-    if (!Array.isArray(blocks)) return 'question_stimulus';
-    if (blocks.length > 0 && blocks[0]?.type === 'stimulus') return 'stimulus_question';
-    return 'question_stimulus';
-  };
-
-  const setLayoutMode = (mode) => {
-    const nextBlocks = mode === 'stimulus_question'
-      ? [
-        { type: 'stimulus', id: 'stimulus' },
-        { type: 'question', id: 'question' },
-        { type: 'table', id: 'tables' },
-        { type: 'image', id: 'images' }
-      ]
-      : [
-        { type: 'question', id: 'question' },
-        { type: 'stimulus', id: 'stimulus' },
-        { type: 'table', id: 'tables' },
-        { type: 'image', id: 'images' }
-      ];
-
-    setForm(prev => ({ ...prev, layout_blocks: nextBlocks }));
   };
 
   const handlePernyataanChecklistChange = (index, value) => {
@@ -568,10 +812,11 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       formData.append("pilihan_b", form.pilihan_b);
       formData.append("pilihan_c", form.pilihan_c);
       formData.append("pilihan_d", form.pilihan_d);
-      formData.append("pilihan_e", form.pilihan_e);
+      formData.append("pilihan_e", form.tipe_soal === "sebab_akibat" ? "" : form.pilihan_e);
       formData.append("jawaban_benar", form.jawaban_benar);
       formData.append("tabel_data", buildTabelDataWithLayoutMetadata());
       if (gambarFile) formData.append("gambar_soal", gambarFile);
+      if (removeGambarSoal) formData.append("remove_gambar_soal", "true");
       if (form.tipe_soal === "ganda_kompleks") formData.append("jawaban_benar_json", JSON.stringify(form.jawaban_benar_json));
       if (form.tipe_soal === "benar_salah") {
         const jawabanBenar = form.pernyataan_checklist.map(p => p.isBenar || false);
@@ -607,10 +852,10 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       stimulusBold: false,
       stimulusFontSize: '16px',
       stimulusAlign: 'left',
-      layout_blocks: [{ type: 'question', id: 'question' }],
+      layout_blocks: defaultLayoutBlocks,
       pasangan_menjodohkan: { kolom_kiri: [], kolom_kanan: [], kunci: {} }
     });
-    setGambarFile(null); setPreviewGambar(null); setEditingSoal(null);
+    setGambarFile(null); setPreviewGambar(null); setRemoveGambarSoal(false); setEditingSoal(null);
   };
 
   const handleEdit = (soalItem) => {
@@ -622,6 +867,25 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
     let pasanganJodoh = { kolom_kiri: [], kolom_kanan: [], kunci: {} };
     if (soalItem.pasangan_menjodohkan) { try { pasanganJodoh = typeof soalItem.pasangan_menjodohkan === 'string' ? JSON.parse(soalItem.pasangan_menjodohkan) : soalItem.pasangan_menjodohkan; } catch(e) {} }
     const layoutMetadata = getLayoutMetadataFromTabelData(soalItem.tabel_data);
+    const stimulusControl = parseStyledTextControl(layoutMetadata?.stimulus_tambahan || "", {
+      fontSize: '16px',
+      align: 'left'
+    });
+    const supportingTables = parseSupportingTablesFromTabelData(soalItem.tabel_data || []);
+    const initialLayoutBlocks = normalizeManualLayoutBlocks(layoutMetadata?.layout_blocks || defaultLayoutBlocks);
+    const ensureInitialBlock = (blocks, type) => {
+      const definition = getLayoutBlockDefinition(type);
+      if (!definition || blocks.some(block => block.type === type)) return blocks;
+      return [...blocks, { type: definition.type, id: definition.id }];
+    };
+    const layoutBlocksWithContent = [
+      [Boolean(stimulusControl.text.trim()), 'stimulus'],
+      [Boolean(soalItem.gambar_soal), 'image'],
+      [supportingTables.length > 0, 'table']
+    ].reduce((blocks, [shouldInclude, type]) => (
+      shouldInclude ? ensureInitialBlock(blocks, type) : blocks
+    ), initialLayoutBlocks);
+
     setForm({
       pertanyaan: parsePlainTextValue(soalItem.pertanyaan || ""),
       pertanyaanBold: false,
@@ -638,16 +902,19 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       kategori_instrumen: soalItem.kategori_instrumen || "HOTS",
       bobot: soalItem.bobot || 1,
       tabel_data: stringifyTabelData(soalItem.tabel_data || ""),
-      supporting_tables: parseSupportingTablesFromTabelData(soalItem.tabel_data || soalItem.tabel_data || []),
+      supporting_tables: supportingTables,
       pernyataan_checklist: pernyataanChecklist,
-      stimulus_tambahan: parsePlainTextValue(layoutMetadata?.stimulus_tambahan || ""),
-      stimulusBold: false,
-      stimulusFontSize: '16px',
-      stimulusAlign: 'left',
-      layout_blocks: layoutMetadata?.layout_blocks || [{ type: 'question', id: 'question' }],
+      stimulus_tambahan: stimulusControl.text,
+      stimulusBold: stimulusControl.bold,
+      stimulusFontSize: stimulusControl.fontSize,
+      stimulusAlign: stimulusControl.align,
+      layout_blocks: layoutBlocksWithContent,
       pasangan_menjodohkan: pasanganJodoh
     });
     if (soalItem.gambar_soal) setPreviewGambar(`${process.env.REACT_APP_API_URL}/uploads/soal/${soalItem.gambar_soal}`);
+    else setPreviewGambar(null);
+    setGambarFile(null);
+    setRemoveGambarSoal(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -1052,7 +1319,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 <label className="form-label">Tipe Soal</label>
                 <select name="tipe_soal" className="select" value={form.tipe_soal} onChange={handleChange}>
                   <option value="pilihan_ganda">Pilihan Ganda (A-D)</option>
-                  <option value="sebab_akibat">Sebab Akibat (A-E)</option>
+                  <option value="sebab_akibat">Sebab Akibat (A-D)</option>
                   <option value="ganda_kompleks">Pilihan Ganda Kompleks</option>
                   <option value="benar_salah">Benar/Salah (Checklist)</option>
                   <option value="menjodohkan">Menjodohkan</option>
@@ -1076,6 +1343,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
             <div style={{ height: '0.5px', background: 'rgba(0,0,0,0.07)', margin: '4px 0 18px' }} />
 
             {/* Upload Gambar */}
+            {normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === 'image') && (
             <div className="form-group">
               <label className="form-label">Gambar Soal <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}>(opsional)</span></label>
               <div style={{
@@ -1086,13 +1354,21 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 <input type="file" accept="image/*" onChange={handleGambarChange}
                   style={{ fontSize: 13, color: 'var(--gray-600)', flex: 1, minWidth: 180 }} />
                 {previewGambar && (
-                  <img src={previewGambar} alt="Preview"
-                    style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.1)' }} />
+                  <img
+                    src={previewGambar}
+                    alt="Preview"
+                    className="question-image-clickable"
+                    title="Klik untuk memperbesar gambar"
+                    onClick={openPreviewImageZoom}
+                    style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.1)' }}
+                  />
                 )}
               </div>
             </div>
+            )}
 
             {/* Tabel Pendukung */}
+            {normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === 'table') && (
             <div className="form-group">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                 <label className="form-label">Tabel Pendukung</label>
@@ -1197,6 +1473,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                                   style={{ width: '100%', background: '#fff' }}
                                   value={cell}
                                   onChange={(e) => updateTableCell(tableIndex, rowIndex, cellIndex, e.target.value)}
+                                  onPaste={(e) => pasteIntoSupportTable(e, tableIndex, rowIndex, cellIndex)}
                                 />
                               </td>
                             ))}
@@ -1223,8 +1500,10 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 </div>
               ))}
             </div>
+            )}
 
             {/* Stimulus Tambahan */}
+            {normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === 'stimulus') && (
             <div className="form-group">
               <label className="form-label">
                 Stimulus Tambahan <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}>(opsional)</span>
@@ -1266,17 +1545,100 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 Stimulus tambahan disimpan dalam metadata layout yang sama dengan Preview Word.
               </p>
             </div>
+            )}
 
             <div className="form-group">
-              <label className="form-label">Urutan Tampilan Soal dan Stimulus</label>
-              <select
-                className="select"
-                value={getLayoutModeFromBlocks(form.layout_blocks)}
-                onChange={(e) => setLayoutMode(e.target.value)}
+              <label className="form-label">Urutan Tampilan Soal</label>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  padding: 12,
+                  border: '1px solid #DBEAFE',
+                  borderRadius: 10,
+                  background: '#EFF6FF'
+                }}
               >
-                <option value="question_stimulus">Pertanyaan lalu stimulus</option>
-                <option value="stimulus_question">Stimulus lalu pertanyaan</option>
-              </select>
+                {normalizeManualLayoutBlocks(form.layout_blocks).map((block, blockIndex, blocks) => (
+                  <div
+                    key={block.type}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '28px 1fr auto auto auto',
+                      gap: 8,
+                      alignItems: 'center',
+                      padding: 8,
+                      borderRadius: 8,
+                      border: '1px solid #BFDBFE',
+                      background: '#FFFFFF'
+                    }}
+                  >
+                    <strong style={{ color: '#1D4ED8', textAlign: 'center' }}>{blockIndex + 1}</strong>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      {layoutBlockLabelMap[block.type] || block.type}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => moveManualLayoutBlock(block.type, -1)}
+                      disabled={blockIndex === 0}
+                      title="Naikkan blok"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <ArrowUp size={14} /> Naik
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => moveManualLayoutBlock(block.type, 1)}
+                      disabled={blockIndex === blocks.length - 1}
+                      title="Turunkan blok"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <ArrowDown size={14} /> Turun
+                    </button>
+                    {block.type === 'question' ? (
+                      <span style={{ fontSize: 12, color: '#64748B', textAlign: 'center' }}>Wajib</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        onClick={() => removeManualLayoutBlock(block.type)}
+                        title="Hapus blok"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        Hapus
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {layoutBlockDefinitions.some(definition => (
+                  definition.type !== 'question' &&
+                  !normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === definition.type)
+                )) && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {layoutBlockDefinitions
+                      .filter(definition => (
+                        definition.type !== 'question' &&
+                        !normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === definition.type)
+                      ))
+                      .map(definition => (
+                        <button
+                          key={definition.type}
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => addManualLayoutBlock(definition.type)}
+                          style={{ borderRadius: 8, fontSize: 12 }}
+                        >
+                          + Tambah {definition.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                <p style={{ margin: 0, fontSize: 12, color: '#475569' }}>
+                  Atur blok yang dipakai pada soal ini. Jawaban tetap tampil paling bawah.
+                </p>
+              </div>
             </div>
 
             {/* Pilihan jawaban - untuk PG, Sebab Akibat, Ganda Kompleks */}
@@ -1297,17 +1659,31 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         }}>{opt.toUpperCase()}</span>
                         Pilihan {opt.toUpperCase()}
                       </label>
-                      <input name={`pilihan_${opt}`} className="input" value={form[`pilihan_${opt}`]} onChange={handleChange} placeholder={`Isi pilihan ${opt.toUpperCase()}...`} />
+                      <input
+                        name={`pilihan_${opt}`}
+                        className="input"
+                        value={form[`pilihan_${opt}`]}
+                        onChange={handleChange}
+                        onPaste={(e) => pasteIntoChoices(e, opt)}
+                        placeholder={`Isi pilihan ${opt.toUpperCase()}...`}
+                      />
                     </div>
                   ))}
                 </div>
-                {(form.tipe_soal === 'sebab_akibat' || form.tipe_soal === 'ganda_kompleks') && (
+                {form.tipe_soal === 'ganda_kompleks' && (
                   <div className="form-group" style={{ marginTop: 10 }}>
                     <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ width: 20, height: 20, borderRadius: 6, background: 'var(--amber-50)', color: 'var(--amber-700)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700 }}>E</span>
                       Pilihan E <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}>(opsional)</span>
                     </label>
-                    <input name="pilihan_e" className="input" value={form.pilihan_e} onChange={handleChange} placeholder="Isi pilihan E..." />
+                    <input
+                      name="pilihan_e"
+                      className="input"
+                      value={form.pilihan_e}
+                      onChange={handleChange}
+                      onPaste={(e) => pasteIntoChoices(e, 'E')}
+                      placeholder="Isi pilihan E..."
+                    />
                   </div>
                 )}
               </div>
@@ -1434,7 +1810,6 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   <option value="B">B - Pernyataan benar, alasan benar, tidak berhubungan</option>
                   <option value="C">C - Pernyataan benar, alasan salah</option>
                   <option value="D">D - Pernyataan salah, alasan benar</option>
-                  <option value="E">E - Pernyataan salah, alasan salah</option>
                 </select>
               </div>
             )}
@@ -1813,6 +2188,30 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   {usingBankSoal ? 'Menambahkan...' : 'Tambahkan ke Instrumen'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {zoomPreviewImage && (
+        <div className="image-zoom-modal" onClick={(event) => event.target === event.currentTarget && closePreviewImageZoom()}>
+          <div className="image-zoom-content">
+            <div className="image-zoom-toolbar">
+              <strong>Preview Gambar</strong>
+              <div>
+                <span>{Math.round(zoomPreviewScale * 100)}%</span>
+                <button type="button" onClick={zoomPreviewOut} disabled={zoomPreviewScale <= 0.5}>-</button>
+                <button type="button" onClick={() => setZoomPreviewScale(1)}>Reset</button>
+                <button type="button" onClick={zoomPreviewIn} disabled={zoomPreviewScale >= 3}>+</button>
+                <button type="button" className="image-zoom-close" onClick={closePreviewImageZoom}>Tutup</button>
+              </div>
+            </div>
+            <div className="image-zoom-preview">
+              <img
+                src={zoomPreviewImage}
+                alt="Preview gambar soal"
+                style={{ transform: `scale(${zoomPreviewScale})` }}
+              />
             </div>
           </div>
         </div>
