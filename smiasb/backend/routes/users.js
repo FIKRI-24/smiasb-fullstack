@@ -16,6 +16,7 @@ const {
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs'); // Tambahan untuk hapus file lama
+const { getUploadDir, resolvePublicUploadPath } = require('../utils/uploadPaths');
 
 async function getUserForAccess(id) {
   const [rows] = await pool.execute(
@@ -284,10 +285,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
 // Konfigurasi Multer untuk upload foto
 // ============================================================
 // Buat folder jika belum ada
-const uploadDir = './uploads/users';
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const uploadDir = getUploadDir('users');
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -337,7 +335,7 @@ router.post('/:id/upload-foto', authenticate, upload.single('foto'), async (req,
 
     // Hapus foto lama jika ada
     if (targetUser.foto) {
-      const oldFotoPath = '.' + targetUser.foto;
+      const oldFotoPath = resolvePublicUploadPath(targetUser.foto);
       if (fs.existsSync(oldFotoPath)) {
         fs.unlinkSync(oldFotoPath);
       }
@@ -371,7 +369,7 @@ router.delete('/:id/foto', authenticate, async (req, res) => {
     if (!canAccessUserTarget(req.user, targetUser, true)) return denyAccess(res);
 
     if (targetUser.foto) {
-      const fotoPath = '.' + targetUser.foto;
+      const fotoPath = resolvePublicUploadPath(targetUser.foto);
       if (fs.existsSync(fotoPath)) {
         fs.unlinkSync(fotoPath);
       }
@@ -396,7 +394,7 @@ router.get('/:id/foto', authenticate, async (req, res) => {
     }
     if (!canAccessUserTarget(req.user, targetUser, true)) return denyAccess(res);
     
-    const fotoPath = path.join(__dirname, '..', targetUser.foto);
+    const fotoPath = resolvePublicUploadPath(targetUser.foto);
     if (fs.existsSync(fotoPath)) {
       res.sendFile(fotoPath);
     } else {

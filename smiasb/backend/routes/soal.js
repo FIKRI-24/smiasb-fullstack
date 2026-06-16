@@ -6,13 +6,12 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { normalizeKelas } = require('../utils/accessControl');
+const { getUploadDir } = require('../utils/uploadPaths');
 
 // Konfigurasi upload gambar
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = process.env.UPLOAD_PATH || './uploads/soal';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    cb(null, getUploadDir('soal'));
   },
   filename: (req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -990,7 +989,7 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
     let gambar_soal = existingSoal[0].gambar_soal;
     if (req.file) {
       if (gambar_soal) {
-        const oldPath = path.join(process.env.UPLOAD_PATH || './uploads/soal', gambar_soal);
+        const oldPath = path.join(getUploadDir('soal'), gambar_soal);
         if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
       }
       gambar_soal = req.file.filename;
@@ -1095,7 +1094,7 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
 
     if (soal[0].gambar_soal) {
       const imagePath = path.join(
-        process.env.UPLOAD_PATH || './uploads/soal',
+        getUploadDir('soal'),
         soal[0].gambar_soal
       );
 

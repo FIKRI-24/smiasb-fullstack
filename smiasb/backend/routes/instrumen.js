@@ -21,13 +21,12 @@ const {
   canAccessInstrumen,
   normalizeKelas
 } = require('../utils/accessControl');
+const { getUploadRoot, getUploadDir } = require('../utils/uploadPaths');
 
 // Konfigurasi upload file
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = process.env.UPLOAD_PATH || './uploads';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    cb(null, getUploadRoot());
   },
   filename: (req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -48,9 +47,7 @@ const upload = multer({
 
 const importImageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(process.cwd(), 'uploads', 'soal');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    cb(null, getUploadDir('soal'));
   },
   filename: (req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -5116,7 +5113,7 @@ router.get('/:id/download', authenticate, async (req, res) => {
     if (rows.length === 0 || !rows[0].file_path) {
       return res.status(404).json({ success: false, message: 'File tidak ditemukan.' });
     }
-    const filePath = path.join(process.env.UPLOAD_PATH || './uploads', rows[0].file_path);
+    const filePath = path.join(getUploadRoot(), rows[0].file_path);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ success: false, message: 'File tidak ada di server.' });
     }
@@ -5620,7 +5617,7 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
     if (!access.ok) return denyAccess(res);
 
     if (existing[0].file_path) {
-      const filePath = path.join(process.env.UPLOAD_PATH || './uploads', existing[0].file_path);
+      const filePath = path.join(getUploadRoot(), existing[0].file_path);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
 
@@ -5832,8 +5829,7 @@ router.post('/:id/import-word/preview', authenticate, authorize('guru', 'admin')
     const instrumen = access.instrumen;
 
     // Folder gambar soal hasil ekstrak Word
-    const imageDir = path.join(process.cwd(), 'uploads', 'soal');
-    if (!fs.existsSync(imageDir)) fs.mkdirSync(imageDir, { recursive: true });
+    const imageDir = getUploadDir('soal');
 
     const savedImages = [];
 

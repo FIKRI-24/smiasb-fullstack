@@ -5,6 +5,7 @@ const path = require('path');
 
 
 const { testConnection } = require('./config/database');
+const { getUploadRoot } = require('./utils/uploadPaths');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -47,8 +48,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Static files untuk upload
-app.use('/uploads/users', express.static(path.join(__dirname, 'uploads')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads/users', express.static(path.join(getUploadRoot(), 'users')));
+app.use('/uploads', express.static(getUploadRoot()));
 
 
 app.get('/api/health', (req, res) => {
