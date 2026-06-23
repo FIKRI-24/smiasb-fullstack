@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { pool } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const { canAccessInstrumen, isInstrumenOpenForWork, isSiswa } = require('../utils/accessControl');
@@ -17,6 +18,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // ================================
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 let chatHistoryColumnsCache = null;
+let chatbotCacheReady = null;
 
 // ================================
 // 🧠 SYSTEM PROMPT
@@ -115,11 +117,19 @@ function isBankSoalLeakRequest(pesan = '') {
 
 function isLikelyEducationTopic(pesan = '') {
   const text = pesan.toLowerCase();
-  return /(belajar|pendidikan|sekolah|siswa|guru|materi|pelajaran|matematika|bahasa indonesia|bahasa inggris|ipa|ips|pkn|agama|seni budaya|pjok|prakarya|hots|literasi|numerasi|asesmen|assessment|instrumen|soal|bank soal|kurikulum|merdeka|nilai|kelas|ujian|tugas|smia|smiasb|cara pakai|penggunaan sistem)/i.test(text);
+  return /(belajar|pendidikan|sekolah|siswa|guru|materi|pelajaran|matematika|bahasa indonesia|bahasa inggris|ipa|ips|pkn|agama|seni budaya|pjok|prakarya|sains|biologi|fisika|kimia|lingkungan|polusi|pencemaran|udara|air|tanah|emisi|industri|kendaraan|kesehatan|penyakit|pernapasan|masyarakat|artikel|teks|stimulus|hots|literasi|numerasi|asesmen|assessment|instrumen|soal|bank soal|kurikulum|merdeka|nilai|kelas|ujian|tugas|smia|smiasb|cara pakai|penggunaan sistem)/i.test(text);
 }
 
 function isSmallTalk(pesan = '') {
   return /^(halo|hai|hi|hello|selamat|assalam|terima kasih|makasih|thanks|bye|dadah)/i.test(pesan.trim());
+}
+
+function hasEducationalHistoryContext(history) {
+  if (!Array.isArray(history)) return false;
+  return history
+    .filter(item => item?.dari === 'user')
+    .slice(-4)
+    .some(item => isLikelyEducationTopic(item?.teks || ''));
 }
 
 function getOutOfScopeResponse() {
@@ -128,6 +138,159 @@ function getOutOfScopeResponse() {
 
 function getBankSoalSafeResponse() {
   return 'Maaf, saya tidak bisa menampilkan isi, kunci jawaban, atau jawaban dari Bank Soal/instrumen yang tersimpan. Saya bisa membantu menjelaskan konsep materinya, memberi contoh soal baru yang setara, atau memandu cara menggunakan fitur Bank Soal dengan benar.';
+}
+
+function normalizeCachePrompt(pesan = '') {
+  return String(pesan || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[.,!?;:"'`()[\]{}<>/\\|@#$%^&*_+=~-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getCachePromptHash(normalizedPrompt) {
+  return crypto
+    .createHash('sha256')
+    .update(normalizedPrompt)
+    .digest('hex');
+}
+
+function hasChatHistoryContext(history) {
+  return Array.isArray(history) && history.some(item => item?.dari === 'user');
+}
+
+function isTimeSensitivePrompt(pesan = '') {
+  return /(sekarang|saat ini|hari ini|besok|kemarin|minggu ini|bulan ini|tahun ini|terbaru|terkini|aktual|update|tanggal|jam berapa|pukul berapa|jadwal|deadline|batas waktu|sedang aktif|masih aktif|dibuka|ditutup)/i.test(pesan);
+}
+
+function isUserOrDatabaseDependentPrompt(pesan = '') {
+  return /(nilai saya|nilaiku|nilai ku|tugas saya|kelasku|kelas saya|akun saya|profil saya|riwayat|nis|email|password|instrumen aktif|soal aktif|instrumen yang aktif|soal yang aktif|instrumen apa.*aktif|soal apa.*aktif|daftar siswa|jumlah siswa|daftar guru|jumlah guru|siapa saja siswa|siapa saja guru)/i.test(pesan);
+}
+
+function isContextDependentPrompt(pesan = '') {
+  return /\b(ini|itu|tersebut|tadi|sebelumnya|lanjut|lanjutkan|jelaskan lagi|maksudnya|di atas|soal ini|soal tadi|instrumen ini|pertanyaan ini|jawaban ini|materi ini|nomor ini)\b/i.test(pesan);
+}
+
+function isCacheablePrompt(pesan = '', history = [], instrumenId = null) {
+  const normalizedPrompt = normalizeCachePrompt(pesan);
+
+  if (normalizedPrompt.length < 10 || normalizedPrompt.length > 300) return false;
+  if (hasChatHistoryContext(history) && isContextDependentPrompt(pesan)) return false;
+  if (instrumenId && isContextDependentPrompt(pesan)) return false;
+  if (isSmallTalk(pesan)) return false;
+  if (isBankSoalLeakRequest(pesan)) return false;
+  if (!isLikelyEducationTopic(pesan)) return false;
+  if (isTimeSensitivePrompt(pesan)) return false;
+  if (isUserOrDatabaseDependentPrompt(pesan)) return false;
+
+  return true;
+}
+
+function isCacheableGeminiAnswer(text = '') {
+  const answer = String(text || '').trim();
+
+  if (answer.length < 20) return false;
+  if (isChatbotErrorResponse(answer)) return false;
+  if (/(kunci jawaban|jawaban nomor|isi soal tersimpan|bank soal tersimpan|api key|gagal terhubung)/i.test(answer)) return false;
+
+  return true;
+}
+
+async function ensureChatbotCacheTable() {
+  if (chatbotCacheReady === true) return true;
+
+  try {
+    await pool.execute('SELECT 1 FROM chatbot_cache LIMIT 1');
+    chatbotCacheReady = true;
+    return true;
+  } catch {
+    // Tabel belum ada atau belum bisa diakses, lanjut coba buat otomatis.
+  }
+
+  try {
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS chatbot_cache (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        normalized_prompt_hash CHAR(64) NOT NULL,
+        normalized_prompt TEXT NOT NULL,
+        balasan MEDIUMTEXT NOT NULL,
+        model VARCHAR(80) NULL,
+        hit_count INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        expires_at DATETIME NULL,
+        last_hit_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uniq_chatbot_cache_prompt_hash (normalized_prompt_hash),
+        KEY idx_chatbot_cache_expires (expires_at),
+        KEY idx_chatbot_cache_last_hit (last_hit_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+
+    chatbotCacheReady = true;
+  } catch (err) {
+    console.error('Chatbot cache init error:', err.message);
+    chatbotCacheReady = false;
+  }
+
+  return chatbotCacheReady;
+}
+
+async function getCachedGeminiResponse(normalizedPrompt) {
+  if (!normalizedPrompt || !(await ensureChatbotCacheTable())) return null;
+
+  try {
+    const promptHash = getCachePromptHash(normalizedPrompt);
+    const [rows] = await pool.execute(
+      `SELECT id, balasan
+       FROM chatbot_cache
+       WHERE normalized_prompt_hash = ?
+         AND normalized_prompt = ?
+         AND is_active = 1
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1`,
+      [promptHash, normalizedPrompt]
+    );
+
+    if (rows.length === 0) return null;
+
+    await pool.execute(
+      `UPDATE chatbot_cache
+       SET hit_count = hit_count + 1, last_hit_at = NOW()
+       WHERE id = ?`,
+      [rows[0].id]
+    );
+
+    return rows[0].balasan;
+  } catch (err) {
+    console.error('Chatbot cache read error:', err.message);
+    return null;
+  }
+}
+
+async function saveGeminiResponseToCache(normalizedPrompt, balasan) {
+  if (!normalizedPrompt || !isCacheableGeminiAnswer(balasan) || !(await ensureChatbotCacheTable())) return;
+
+  try {
+    const promptHash = getCachePromptHash(normalizedPrompt);
+    await pool.execute(
+      `INSERT INTO chatbot_cache
+        (normalized_prompt_hash, normalized_prompt, balasan, model, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 90 DAY), NOW(), NOW())
+       ON DUPLICATE KEY UPDATE
+        normalized_prompt = VALUES(normalized_prompt),
+        balasan = VALUES(balasan),
+        model = VALUES(model),
+        expires_at = VALUES(expires_at),
+        is_active = 1,
+        updated_at = NOW()`,
+      [promptHash, normalizedPrompt, balasan, GEMINI_MODEL]
+    );
+  } catch (err) {
+    console.error('Chatbot cache write error:', err.message);
+  }
 }
 
 async function getChatHistoryColumns() {
@@ -299,14 +462,28 @@ router.post('/send', authenticate, async (req, res) => {
       balasan = intentResult.response;
     } else if (isBankSoalLeakRequest(pesanAsli)) {
       balasan = getBankSoalSafeResponse();
-    } else if (!isLikelyEducationTopic(pesanAsli) && !isSmallTalk(pesanAsli)) {
+    } else if (!isLikelyEducationTopic(pesanAsli) && !hasEducationalHistoryContext(history) && !isSmallTalk(pesanAsli)) {
       balasan = getOutOfScopeResponse();
     } else {
       // ── LANGKAH 2: Preprocessing teks ──
       const pesanBersih = preprocessTeks(pesanAsli);
 
       // ── LANGKAH 3: Kirim ke Gemini AI ──
-      balasan = await callGeminiAI(pesanBersih, history);
+      const cacheAllowed = isCacheablePrompt(pesanAsli, history, instrumen_id);
+      const normalizedCachePrompt = cacheAllowed ? normalizeCachePrompt(pesanAsli) : '';
+      const cachedBalasan = cacheAllowed
+        ? await getCachedGeminiResponse(normalizedCachePrompt)
+        : null;
+
+      if (cachedBalasan) {
+        balasan = cachedBalasan;
+      } else {
+        balasan = await callGeminiAI(pesanBersih, history);
+
+        if (cacheAllowed) {
+          await saveGeminiResponseToCache(normalizedCachePrompt, balasan);
+        }
+      }
     }
 
     // ── LANGKAH 4: Simpan ke database ──

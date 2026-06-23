@@ -563,6 +563,50 @@ function getLayoutMetadataFromTabelData(tabelData) {
   return tabelData.find(isLayoutMetadataBlock) || null;
 }
 
+function parseTabelDataForSave(value) {
+  if (!value || value === 'null') return null;
+
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function serializeTabelDataForSave(value, gambarSoal = null) {
+  const parsed = parseTabelDataForSave(value);
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+  const layoutMetadata = getLayoutMetadataFromTabelData(parsed);
+  const hasImageBlock = Array.isArray(layoutMetadata?.layout_blocks) &&
+    layoutMetadata.layout_blocks.some(block => String(block?.type || '') === 'image');
+
+  if (layoutMetadata && hasImageBlock) {
+    if (gambarSoal) {
+      const existingImage = Array.isArray(layoutMetadata.gambar) && layoutMetadata.gambar.length > 0
+        ? layoutMetadata.gambar[0]
+        : {};
+
+      layoutMetadata.gambar = [{
+        ...existingImage,
+        file_name: existingImage.file_name || gambarSoal,
+        src: existingImage.src || `/uploads/soal/${gambarSoal}`,
+        caption: existingImage.caption || '',
+        alt: existingImage.alt || existingImage.caption || '',
+        source: existingImage.source || 'manual',
+        ukuran: existingImage.ukuran || 'sedang',
+        width: existingImage.width || '75%',
+        align: existingImage.align || 'center'
+      }];
+    } else {
+      layoutMetadata.gambar = [];
+    }
+  }
+
+  return JSON.stringify(parsed);
+}
+
 function sanitizeLayoutBlocksForSiswa(blocks = []) {
   const allowed = new Map([
     ['question', 'question'],
@@ -845,10 +889,7 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
     const gambar_soal = req.file ? req.file.filename : null;
 
     // Parse JSON fields
-    let parsedTabelData = null;
-    if (tabel_data && tabel_data !== 'null') {
-      try { parsedTabelData = JSON.stringify(JSON.parse(tabel_data)); } catch (e) {}
-    }
+    const parsedTabelData = serializeTabelDataForSave(tabel_data, gambar_soal);
 
     let parsedJawabanJson = null;
     if (jawaban_benar_json && tipe_soal === 'ganda_kompleks') {
@@ -911,9 +952,6 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
       }
     }
     else if (tipe_soal === 'sebab_akibat') {
-      if (!pilihan_a || !pilihan_b) {
-        return res.status(400).json({ success: false, message: 'Pernyataan dan sebab wajib diisi' });
-      }
       if (!['A', 'B', 'C', 'D'].includes(jawaban_benar)) {
         return res.status(400).json({ success: false, message: 'Jawaban benar harus A/B/C/D' });
       }
@@ -1043,6 +1081,12 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
       } catch (e) {}
     }
 
+    const hasTabelDataPayload = Object.prototype.hasOwnProperty.call(req.body, 'tabel_data');
+    const tabelDataUpdate = serializeTabelDataForSave(
+      hasTabelDataPayload ? req.body.tabel_data : existingSoal[0].tabel_data,
+      gambar_soal
+    );
+
     await pool.execute(
       `UPDATE soal SET 
         pertanyaan = ?, gambar_soal = ?, tabel_data = ?,
@@ -1054,7 +1098,7 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
       [
         req.body.pertanyaan || existingSoal[0].pertanyaan,
         gambar_soal,
-        req.body.tabel_data || existingSoal[0].tabel_data,
+        tabelDataUpdate,
         req.body.pilihan_a || existingSoal[0].pilihan_a,
         req.body.pilihan_b || existingSoal[0].pilihan_b,
         req.body.pilihan_c || existingSoal[0].pilihan_c,

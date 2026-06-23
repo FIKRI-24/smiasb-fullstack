@@ -883,14 +883,6 @@ function validateImportPreviewBeforeSave(soalPreview = []) {
     }
 
     if (tipe === 'sebab_akibat') {
-      if (!htmlPlainText(soal.pilihan_a || '')) {
-        errors.push(`Soal nomor ${nomor} belum memiliki bagian pernyataan.`);
-      }
-
-      if (!htmlPlainText(soal.pilihan_b || '')) {
-        errors.push(`Soal nomor ${nomor} belum memiliki bagian sebab.`);
-      }
-
       if (!soal.jawaban_benar) errors.push(`Soal nomor ${nomor} belum memiliki kunci jawaban.`);
       if (String(soal.jawaban_benar || '').trim().toUpperCase() === 'E') {
         errors.push(`Soal nomor ${nomor} memiliki kunci E. Tipe sebab-akibat hanya memakai A-D.`);
@@ -915,7 +907,7 @@ function buildImportQualityReport(soalPreview = [], options = {}) {
     const tipe = soal.tipe_soal || 'pilihan_ganda';
     const textForCue = `${soal.pertanyaan || ''} ${soal.raw_text || ''}`;
     const pilihanMissing = ['A', 'B', 'C', 'D'].filter(label => !getImportChoiceValue(soal, label));
-    const needsChoices = ['pilihan_ganda', 'ganda_kompleks', 'sebab_akibat'].includes(tipe);
+    const needsChoices = ['pilihan_ganda', 'ganda_kompleks'].includes(tipe);
     const tablesForQuestion = normalizeSupportingTables(soal);
 
     if (hasImageStimulusCue(textForCue) && (!Array.isArray(soal.gambar) || soal.gambar.length === 0)) {
@@ -3469,6 +3461,13 @@ function splitSebabAkibatParts(question) {
   };
 }
 
+function cleanSebabAkibatStatementText(value = '') {
+  return cleanText(value)
+    .replace(/^\d+\s*[.)]\s*/i, '')
+    .replace(/^Bacalah pernyataan berikut ini dengan cermat!\s*/i, '')
+    .trim();
+}
+
 function buildPertanyaanSebabAkibatFromQuestion(question, fallbackPrompt = '') {
   const parts = splitSebabAkibatParts(question);
 
@@ -3476,13 +3475,17 @@ function buildPertanyaanSebabAkibatFromQuestion(question, fallbackPrompt = '') {
     return fallbackPrompt || question.raw_text || '';
   }
 
-  return `Pernyataan:
-${parts.pernyataan}
+  const pernyataan = cleanSebabAkibatStatementText(parts.pernyataan);
+  const sebab = cleanText(parts.sebab);
+
+  if (!pernyataan || !sebab) {
+    return fallbackPrompt || question.raw_text || '';
+  }
+
+  return `${pernyataan}
 
 SEBAB:
-${parts.sebab}
-
-Pilihlah jawaban yang paling tepat dari pernyataan di atas.`;
+${sebab}`;
 }
 
 function buildLegacyParserDebug(html, questions = [], strategy = 'legacy_phrase', targetSoal = 0) {
@@ -3898,66 +3901,116 @@ function buildSoalPreviewResultFromHtml(html, options = {}) {
 function buildSoalPreviewFromHtml(html, options = {}) {
   return buildSoalPreviewResultFromHtml(html, options).soal_preview;
 }
+
+function normalizeComparableImportText(value = '') {
+  return htmlPlainText(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isImportQuestionContentEmpty(value = '') {
+  return !normalizeComparableImportText(value) && !/<(img|table)\b/i.test(String(value || ''));
+}
+
+function isSebabAkibatAnswerTemplate(value = '') {
+  const text = normalizeComparableImportText(value)
+    .replace(/^[a-e]\s*[.)-]\s*/i, '')
+    .trim();
+
+  return (
+    /^pernyataan benar,?\s+alasan benar\b.*(?:berhubungan|hubungan sebab[-\s]?akibat|menunjukkan hubungan)/i.test(text) ||
+    /^pernyataan benar,?\s+alasan benar\b.*tidak\b.*hubungan/i.test(text) ||
+    /^pernyataan benar,?\s+alasan salah\b/i.test(text) ||
+    /^pernyataan salah,?\s+alasan benar\b/i.test(text) ||
+    /^pernyataan salah,?\s+alasan salah\b/i.test(text)
+  );
+}
+
+function wrapSebabAkibatQuestionPart(value = '', label = '') {
+  if (isImportQuestionContentEmpty(value)) return '';
+  const body = sanitizeImportHtmlForSave(value);
+  return label
+    ? `<div><strong>${label}</strong><br>${body}</div>`
+    : `<div>${body}</div>`;
+}
+
+function isGenericSebabAkibatPrompt(value = '') {
+  const text = normalizeComparableImportText(value)
+    .replace(/^\d+\s*[.)]\s*/i, '')
+    .replace(/[.!?]+$/g, '')
+    .trim();
+
+  return (
+    /^bacalah\s+pernyataan\s+berikut/i.test(text) ||
+    /^perhatikan\s+pernyataan\s+berikut/i.test(text)
+  );
+}
+
+function cleanSebabAkibatQuestionBoilerplate(value = '') {
+  return String(value || '')
+    .replace(/^\s*(?:\d+\s*[.)]\s*)?Bacalah\s+pernyataan\s+berikut(?:\s+ini)?\s+dengan\s+cermat!?\s*/i, '')
+    .replace(/\s*Pilihlah\s+jawaban\s+yang\s+paling\s+tepat\s+dari\s+pernyataan\s+di\s+atas\.?\s*/gi, '\n')
+    .replace(/^\s*Pernyataan\s*:\s*/i, '')
+    .trim();
+}
+
 function buildPertanyaanSebabAkibat(soal) {
+  const existingPertanyaan = sanitizeImportHtmlForSave(
+    cleanSebabAkibatQuestionBoilerplate(soal.pertanyaan || '')
+  ).trim();
+  const rawText = sanitizeImportHtmlForSave(
+    cleanSebabAkibatQuestionBoilerplate(soal.raw_text || '')
+  ).trim();
+  const baseQuestion = existingPertanyaan || rawText;
   const editedPernyataan = sanitizeImportHtmlForSave(soal.pilihan_a || '');
   const editedSebab = sanitizeImportHtmlForSave(soal.pilihan_b || '');
+  const pernyataan = isSebabAkibatAnswerTemplate(editedPernyataan) ? '' : editedPernyataan;
+  const sebab = isSebabAkibatAnswerTemplate(editedSebab) ? '' : editedSebab;
+  const hasLegacyParts = !isImportQuestionContentEmpty(pernyataan) || !isImportQuestionContentEmpty(sebab);
+  const displayBaseQuestion = hasLegacyParts && isGenericSebabAkibatPrompt(baseQuestion) ? '' : baseQuestion;
+  const baseComparable = normalizeComparableImportText(displayBaseQuestion);
+  const additions = [];
 
-  if (htmlPlainText(editedPernyataan) && htmlPlainText(editedSebab)) {
-    return [
-      '<p>Bacalah pernyataan berikut ini dengan cermat!</p>',
-      `<p><strong>Pernyataan:</strong><br>${editedPernyataan}</p>`,
-      `<p><strong>SEBAB:</strong><br>${editedSebab}</p>`,
-      '<p>Pilihlah jawaban yang paling tepat dari pernyataan di atas.</p>'
-    ].join('\n');
+  const pernyataanComparable = normalizeComparableImportText(pernyataan);
+  if (pernyataanComparable && !baseComparable.includes(pernyataanComparable)) {
+    additions.push(wrapSebabAkibatQuestionPart(pernyataan));
   }
 
-  const existingPertanyaan = String(soal.pertanyaan || '').trim();
-
-  if (/Pernyataan\s*:/i.test(existingPertanyaan) && /\bSEBAB\s*:/i.test(existingPertanyaan)) {
-    return existingPertanyaan;
+  const sebabComparable = normalizeComparableImportText(sebab);
+  if (sebabComparable && !baseComparable.includes(sebabComparable)) {
+    additions.push(wrapSebabAkibatQuestionPart(sebab, 'SEBAB:'));
   }
 
-  const rawText = String(soal.raw_text || soal.pertanyaan || '')
+  const combined = [displayBaseQuestion, ...additions]
+    .filter(value => !isImportQuestionContentEmpty(value))
+    .join('\n');
+
+  if (combined) return combined;
+
+  const plainRawText = String(soal.raw_text || soal.pertanyaan || '')
     .replace(/\s+/g, ' ')
     .trim();
-
-  if (!rawText) {
-    return soal.pertanyaan || '';
-  }
-
-  const lower = rawText.toLowerCase();
+  const lower = plainRawText.toLowerCase();
   const sebabIndex = lower.indexOf('sebab');
 
-  if (sebabIndex === -1 || /sebab\s*[-\u2013\u2014]\s*akibat/i.test(rawText)) {
-    return soal.pertanyaan || rawText;
+  if (sebabIndex === -1 || /sebab\s*[-\u2013\u2014]\s*akibat/i.test(plainRawText)) {
+    return baseQuestion || plainRawText;
   }
 
-  let pilihIndex = lower.indexOf('pilihlah jawaban');
-
-  let pembuka = soal.pertanyaan || 'Bacalah pernyataan berikut ini dengan cermat!';
-
-  let pernyataan = rawText.substring(0, sebabIndex).trim();
-  pernyataan = pernyataan
+  const pilihIndex = lower.indexOf('pilihlah jawaban');
+  const statementText = plainRawText
+    .substring(0, sebabIndex)
     .replace(/^Bacalah pernyataan berikut ini dengan cermat!\s*/i, '')
     .trim();
+  const reasonText = pilihIndex !== -1 && pilihIndex > sebabIndex
+    ? plainRawText.substring(sebabIndex + 5, pilihIndex).trim()
+    : plainRawText.substring(sebabIndex + 5).trim();
 
-  let sebab = '';
-
-  if (pilihIndex !== -1 && pilihIndex > sebabIndex) {
-    sebab = rawText.substring(sebabIndex + 5, pilihIndex).trim();
-  } else {
-    sebab = rawText.substring(sebabIndex + 5).trim();
-  }
-
-  return `${pembuka}
-
-Pernyataan:
-${pernyataan}
-
-SEBAB:
-${sebab}
-
-Pilihlah jawaban yang paling tepat dari pernyataan di atas.`;
+  return [
+    wrapSebabAkibatQuestionPart(statementText),
+    wrapSebabAkibatQuestionPart(reasonText, 'SEBAB:')
+  ].filter(Boolean).join('\n') || baseQuestion || plainRawText;
 }
 async function validateImportAccess(req, instrumenId) {
   const access = await canAccessInstrumen(req.user, instrumenId, 'import');

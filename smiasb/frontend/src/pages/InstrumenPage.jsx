@@ -950,6 +950,88 @@ const getChoiceText = (soal, label) => {
   return stripChoicePrefix(soal[key])
 }
 
+const isSebabAkibatAnswerTemplate = (value = '') => {
+  const text = stripHtml(String(value || ''))
+    .replace(/\s+/g, ' ')
+    .replace(/^[A-E]\s*[.)-]\s*/i, '')
+    .trim()
+    .toLowerCase()
+
+  return (
+    /^pernyataan benar,?\s+alasan benar\b.*(?:berhubungan|hubungan sebab[-\s]?akibat|menunjukkan hubungan)/i.test(text) ||
+    /^pernyataan benar,?\s+alasan benar\b.*tidak\b.*hubungan/i.test(text) ||
+    /^pernyataan benar,?\s+alasan salah\b/i.test(text) ||
+    /^pernyataan salah,?\s+alasan benar\b/i.test(text) ||
+    /^pernyataan salah,?\s+alasan salah\b/i.test(text)
+  )
+}
+
+const normalizeComparableQuestionText = (value = '') => (
+  stripHtml(String(value || ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+)
+
+const isEmptyQuestionContent = (value = '') => (
+  !normalizeComparableQuestionText(value) && !/<(img|table)\b/i.test(String(value || ''))
+)
+
+const wrapSebabAkibatQuestionPart = (value = '', label = '') => {
+  if (isEmptyQuestionContent(value)) return ''
+  const body = String(value || '').trim()
+  return label
+    ? `<div><strong>${label}</strong><br>${body}</div>`
+    : `<div>${body}</div>`
+}
+
+const isGenericSebabAkibatPrompt = (value = '') => {
+  const text = normalizeComparableQuestionText(value)
+    .replace(/^\d+\s*[.)]\s*/, '')
+    .replace(/[.!?]+$/g, '')
+    .trim()
+
+  return (
+    /^bacalah\s+pernyataan\s+berikut/i.test(text) ||
+    /^perhatikan\s+pernyataan\s+berikut/i.test(text)
+  )
+}
+
+const cleanSebabAkibatQuestionBoilerplate = (value = '') => (
+  String(value || '')
+    .replace(/^\s*(?:\d+\s*[.)]\s*)?Bacalah\s+pernyataan\s+berikut(?:\s+ini)?\s+dengan\s+cermat!?\s*/i, '')
+    .replace(/\s*Pilihlah\s+jawaban\s+yang\s+paling\s+tepat\s+dari\s+pernyataan\s+di\s+atas\.?\s*/gi, '\n')
+    .replace(/^\s*Pernyataan\s*:\s*/i, '')
+    .trim()
+)
+
+const buildSebabAkibatQuestionText = (soal = {}) => {
+  const rawBaseQuestion = soal.pertanyaan || ''
+  if (soal.tipe_soal !== 'sebab_akibat') return rawBaseQuestion
+  const baseQuestion = cleanSebabAkibatQuestionBoilerplate(rawBaseQuestion)
+
+  const pernyataan = isSebabAkibatAnswerTemplate(soal.pilihan_a) ? '' : (soal.pilihan_a || '')
+  const sebab = isSebabAkibatAnswerTemplate(soal.pilihan_b) ? '' : (soal.pilihan_b || '')
+  const hasLegacyParts = !isEmptyQuestionContent(pernyataan) || !isEmptyQuestionContent(sebab)
+  const displayBaseQuestion = hasLegacyParts && isGenericSebabAkibatPrompt(baseQuestion) ? '' : baseQuestion
+  const baseComparable = normalizeComparableQuestionText(displayBaseQuestion)
+  const additions = []
+
+  const pernyataanComparable = normalizeComparableQuestionText(pernyataan)
+  if (pernyataanComparable && !baseComparable.includes(pernyataanComparable)) {
+    additions.push(wrapSebabAkibatQuestionPart(pernyataan))
+  }
+
+  const sebabComparable = normalizeComparableQuestionText(sebab)
+  if (sebabComparable && !baseComparable.includes(sebabComparable)) {
+    additions.push(wrapSebabAkibatQuestionPart(sebab, 'SEBAB:'))
+  }
+
+  return [displayBaseQuestion, ...additions]
+    .filter(value => !isEmptyQuestionContent(value))
+    .join('\n')
+}
+
 const getVisibleChoiceLabels = (soal) => {
   const selected = Array.isArray(soal.jawaban_benar_json)
     ? soal.jawaban_benar_json
@@ -1168,6 +1250,9 @@ const normalizeImportSoalPreview = (soal = {}) => {
   next.supporting_tables = supportingTables
   next.tabel_data = supportingTables
   next.pertanyaan = normalizeHtmlField(next.pertanyaan || '')
+  if (next.tipe_soal === 'sebab_akibat') {
+    next.pertanyaan = normalizeHtmlField(buildSebabAkibatQuestionText(next))
+  }
   next.stimulus_tambahan = normalizeHtmlField(next.stimulus_tambahan || '')
   next.layout_blocks = buildQuestionLayoutBlocks(next)
 
@@ -1222,6 +1307,9 @@ const buildSaveImportPayload = (list = []) => (
       : []
     next.supporting_tables = supportingTables
     next.pertanyaan = normalizeHtmlField(next.pertanyaan || '')
+    if (next.tipe_soal === 'sebab_akibat') {
+      next.pertanyaan = normalizeHtmlField(buildSebabAkibatQuestionText(next))
+    }
     next.stimulus_tambahan = normalizeHtmlField(next.stimulus_tambahan || '')
     next.layout_blocks = buildQuestionLayoutBlocks(next)
     next.tabel_data = [...supportingTables, buildLayoutMetadataTable(next)]
@@ -1342,7 +1430,6 @@ const validateImportPreview = (list = []) => {
   normalizedList.forEach((soal, index) => {
     const nomor = soal.nomor || index + 1
     const tipe = soal.tipe_soal
-    const pertanyaan = stripHtml(sanitizeRichHtml(soal.pertanyaan || '')).trim()
 
     if (isHtmlEmpty(soal.pertanyaan || '')) {
       errors.push(`Soal nomor ${nomor} belum memiliki pertanyaan.`)
@@ -1376,14 +1463,6 @@ const validateImportPreview = (list = []) => {
     }
 
     if (tipe === 'sebab_akibat') {
-      if (isHtmlEmpty(soal.pilihan_a || '')) {
-        errors.push(`Soal nomor ${nomor} belum memiliki bagian pernyataan.`)
-      }
-
-      if (isHtmlEmpty(soal.pilihan_b || '')) {
-        errors.push(`Soal nomor ${nomor} belum memiliki bagian sebab.`)
-      }
-
       if (!soal.jawaban_benar) {
         errors.push(`Soal nomor ${nomor} belum memiliki kunci jawaban.`)
       }
@@ -2488,7 +2567,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
     if (blockType === 'question') {
       return (
         <div style={{ minWidth: 0 }}>
-          {renderSafeHtml(soal.pertanyaan || '', { fallback: 'Pertanyaan belum diisi.' })}
+          {renderSafeHtml(buildSebabAkibatQuestionText(soal), { fallback: 'Pertanyaan belum diisi.' })}
         </div>
       )
     }
@@ -2566,12 +2645,6 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
         {soal.tipe_soal === 'sebab_akibat' && (
           <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ padding: 12, borderRadius: 8, background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Pernyataan</div>
-              {renderSafeHtml(soal.pilihan_a || '', { fallback: '-' })}
-              <div style={{ fontWeight: 700, marginTop: 10, marginBottom: 4 }}>Sebab</div>
-              {renderSafeHtml(soal.pilihan_b || '', { fallback: '-' })}
-            </div>
             <select className="input" disabled value="">
               <option>-- Pilih jawaban --</option>
               <option>A. Pernyataan benar, alasan benar, berhubungan</option>
@@ -4135,36 +4208,6 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
                   {soal.tipe_soal === 'sebab_akibat' && (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>Pernyataan dan Sebab</div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                        <div>
-                          <label style={{ fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                            Pernyataan
-                          </label>
-                          <RichTextEditor
-                            value={soal.pilihan_a || ''}
-                            onChange={value => updatePilihanImport(index, 'A', value)}
-                            minHeight={90}
-                            compact
-                            placeholder="Isi pernyataan"
-                          />
-                        </div>
-
-                        <div>
-                          <label style={{ fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                            Sebab
-                          </label>
-                          <RichTextEditor
-                            value={soal.pilihan_b || ''}
-                            onChange={value => updatePilihanImport(index, 'B', value)}
-                            minHeight={90}
-                            compact
-                            placeholder="Isi sebab/alasan"
-                          />
-                        </div>
-                      </div>
-
                       <div
                         style={{
                           display: 'grid',

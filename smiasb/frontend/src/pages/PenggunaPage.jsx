@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { KeyRound, Power, Trash2 } from 'lucide-react'
+import { KeyRound, Pencil, Power, Trash2 } from 'lucide-react'
 import { userAPI } from '../api'
 import { KELAS } from '../constants/classes'
 import { confirmToast, toast } from '../utils/notify'
@@ -10,6 +10,7 @@ const MAPEL = ['Matematika','Bahasa Indonesia','Bahasa Inggris','IPA','IPS','PKn
 const roleColor = { super_admin:'purple', admin:'purple', admin_sekolah:'purple', guru:'blue', siswa:'teal' }
 const roleBadge = { super_admin:'badge-purple', admin:'badge-purple', admin_sekolah:'badge-purple', guru:'badge-blue', siswa:'badge-teal' }
 const emptyForm = { nama:'', email:'', password:'', peran:'guru', mata_pelajaran:'', nip:'', kelas:'', nis:'' }
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
 
 export default function PenggunaPage() {
   const navigate = useNavigate()
@@ -19,12 +20,15 @@ export default function PenggunaPage() {
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  const [editingUser, setEditingUser] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [passwordModalUser, setPasswordModalUser] = useState(null)
   const [newPassword, setNewPassword] = useState('')
   const [passwordSaving, setPasswordSaving] = useState(false)
   const [passwordError, setPasswordError] = useState('')
+  const [resetRequests, setResetRequests] = useState([])
+  const [loadingResetRequests, setLoadingResetRequests] = useState(false)
 
   const fetch = async () => {
     setLoading(true)
@@ -38,35 +42,106 @@ export default function PenggunaPage() {
     finally { setLoading(false) }
   }
 
+  const fetchResetRequests = async () => {
+    setLoadingResetRequests(true)
+    try {
+      const res = await userAPI.getPasswordResetRequests()
+      setResetRequests(res.data.data || [])
+    } catch {
+      setResetRequests([])
+    } finally {
+      setLoadingResetRequests(false)
+    }
+  }
+
   useEffect(() => { fetch() }, [tab])
+  useEffect(() => { fetchResetRequests() }, [])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const isEditMode = Boolean(editingUser)
 
-  const handleAdd = async () => {
-    if (!form.nama || !form.password) {
-      setError('Nama dan password wajib diisi.')
+  const closeUserModal = (force = false) => {
+    if (saving && !force) return
+    setShowModal(false)
+    setEditingUser(null)
+    setForm(emptyForm)
+    setError('')
+  }
+
+  const openAddModal = () => {
+    setEditingUser(null)
+    setForm(emptyForm)
+    setError('')
+    setShowModal(true)
+  }
+
+  const openEditModal = (user) => {
+    setEditingUser(user)
+    setForm({
+      ...emptyForm,
+      nama: user.nama || '',
+      email: user.email || '',
+      password: '',
+      peran: user.peran === 'admin' ? 'admin_sekolah' : user.peran,
+      mata_pelajaran: user.mata_pelajaran || '',
+      nip: user.nip || '',
+      kelas: user.kelas || '',
+      nis: user.nis || '',
+    })
+    setError('')
+    setShowModal(true)
+  }
+
+  const validateUserForm = () => {
+    if (!form.nama.trim()) {
+      return 'Nama wajib diisi.'
+    }
+    if (!isEditMode && form.password.length < 6) {
+      return 'Password awal minimal 6 karakter.'
+    }
+    if (form.peran === 'guru' && !isValidEmail(form.email)) {
+      return 'Email guru wajib diisi dengan format yang valid.'
+    }
+    if (!isEditMode && form.peran === 'siswa' && !form.nis.trim()) {
+      return 'NIS siswa wajib diisi.'
+    }
+
+    return ''
+  }
+
+  const handleSaveUser = async () => {
+    const validationMessage = validateUserForm()
+
+    if (validationMessage) {
+      setError(validationMessage)
       return
     }
-    if (form.peran !== 'siswa' && !form.email.includes('@')) {
-      setError('Email wajib diisi dengan format yang valid.')
-      return
-    }
-    if (form.peran === 'siswa' && !form.nis.trim()) {
-      setError('NIS siswa wajib diisi.')
-      return
-    }
+
     setSaving(true); setError('')
     try {
-      await userAPI.create({
-        ...form,
-        email: form.peran === 'siswa' ? '' : form.email.trim(),
-        nis: form.peran === 'siswa' ? form.nis.trim() : ''
-      })
-      setShowModal(false)
-      setForm(emptyForm)
+      if (isEditMode) {
+        await userAPI.update(editingUser.id, {
+          nama: form.nama.trim(),
+          email: form.peran === 'siswa' ? undefined : form.email.trim(),
+          mata_pelajaran: form.peran === 'guru' ? form.mata_pelajaran : '',
+          nip: form.peran === 'guru' ? form.nip : '',
+          kelas: form.peran === 'siswa' ? form.kelas : '',
+          nis: form.peran === 'siswa' ? form.nis.trim() : ''
+        })
+      } else {
+        await userAPI.create({
+          ...form,
+          nama: form.nama.trim(),
+          email: form.peran === 'siswa' ? '' : form.email.trim(),
+          nis: form.peran === 'siswa' ? form.nis.trim() : ''
+        })
+      }
+
+      closeUserModal(true)
       fetch()
     } catch (err) {
-      setError(err.response?.data?.message || 'Gagal menambah pengguna.')
+      const validationError = err.response?.data?.errors?.[0]?.msg
+      setError(validationError || err.response?.data?.message || 'Gagal menyimpan pengguna.')
     } finally { setSaving(false) }
   }
 
@@ -85,6 +160,14 @@ export default function PenggunaPage() {
     setPasswordModalUser(user)
     setNewPassword('')
     setPasswordError('')
+  }
+
+  const openPasswordModalFromRequest = (request) => {
+    openPasswordModal({
+      id: request.user_id,
+      nama: request.nama || request.identifier,
+      peran: request.peran
+    })
   }
 
   const closePasswordModal = () => {
@@ -109,10 +192,21 @@ export default function PenggunaPage() {
       setPasswordModalUser(null)
       setNewPassword('')
       setPasswordError('')
+      fetchResetRequests()
     } catch (err) {
       setPasswordError(err.response?.data?.message || 'Gagal memperbarui password.')
     } finally {
       setPasswordSaving(false)
+    }
+  }
+
+  const handleResolveResetRequest = async (id) => {
+    try {
+      await userAPI.resolvePasswordResetRequest(id)
+      toast.success('Permintaan reset password ditandai selesai.')
+      fetchResetRequests()
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Gagal memperbarui permintaan reset.')
     }
   }
 
@@ -143,16 +237,23 @@ export default function PenggunaPage() {
   return (
     <div>
       {showModal && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closeUserModal()}>
           <div className="modal">
-            <div className="modal-title">Tambah pengguna baru</div>
+            <div className="modal-title">{isEditMode ? 'Edit pengguna' : 'Tambah pengguna baru'}</div>
             {error && <div className="alert alert-error">{error}</div>}
 
             <div className="form-group">
               <label className="form-label">Peran</label>
               <div className="role-tabs" style={{marginBottom:0}}>
                 {PERAN.map(r => (
-                  <button key={r} type="button" className={'role-tab'+(form.peran===r?' active':'')} onClick={() => set('peran', r)} style={{textTransform:'capitalize'}}>
+                  <button
+                    key={r}
+                    type="button"
+                    className={'role-tab'+(form.peran===r?' active':'')}
+                    onClick={() => !isEditMode && set('peran', r)}
+                    disabled={isEditMode}
+                    style={{textTransform:'capitalize', cursor: isEditMode ? 'not-allowed' : 'pointer', opacity: isEditMode && form.peran !== r ? 0.55 : 1}}
+                  >
                     {r}
                   </button>
                 ))}
@@ -166,8 +267,14 @@ export default function PenggunaPage() {
               </div>
               {form.peran !== 'siswa' && (
                 <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input className="input" type="email" placeholder="email@adabiah.sch.id" value={form.email} onChange={e => set('email', e.target.value)} />
+                  <label className="form-label">{form.peran === 'guru' ? 'Email guru' : 'Email / username'}</label>
+                  <input
+                    className="input"
+                    type={form.peran === 'guru' ? 'email' : 'text'}
+                    placeholder={form.peran === 'guru' ? 'email@adabiah.sch.id' : 'Opsional'}
+                    value={form.email}
+                    onChange={e => set('email', e.target.value)}
+                  />
                 </div>
               )}
             </div>
@@ -199,20 +306,29 @@ export default function PenggunaPage() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">NIS</label>
-                  <input className="input" placeholder="NIS siswa" value={form.nis} onChange={e => set('nis', e.target.value)} />
+                  <input
+                    className="input"
+                    placeholder="NIS siswa"
+                    value={form.nis}
+                    onChange={e => set('nis', e.target.value)}
+                    disabled={isEditMode && Boolean(editingUser?.nis)}
+                    style={isEditMode && editingUser?.nis ? { opacity: 0.65, cursor: 'not-allowed' } : undefined}
+                  />
                 </div>
               </div>
             )}
 
-            <div className="form-group">
-              <label className="form-label">Password awal</label>
-              <input className="input" type="password" placeholder="Min. 6 karakter" value={form.password} onChange={e => set('password', e.target.value)} />
-            </div>
+            {!isEditMode && (
+              <div className="form-group">
+                <label className="form-label">Password awal</label>
+                <input className="input" type="password" placeholder="Min. 6 karakter" value={form.password} onChange={e => set('password', e.target.value)} />
+              </div>
+            )}
 
             <div className="modal-actions">
-              <button className="btn" onClick={() => setShowModal(false)}>Batal</button>
-              <button className="btn btn-primary" onClick={handleAdd} disabled={saving}>
-                {saving ? <><span className="spinner" /> Menyimpan...</> : 'Tambah pengguna'}
+              <button className="btn" onClick={() => closeUserModal()} disabled={saving}>Batal</button>
+              <button className="btn btn-primary" onClick={handleSaveUser} disabled={saving}>
+                {saving ? <><span className="spinner" /> Menyimpan...</> : (isEditMode ? 'Simpan perubahan' : 'Tambah pengguna')}
               </button>
             </div>
           </div>
@@ -261,9 +377,75 @@ export default function PenggunaPage() {
             </div>
           ))}
         </div>
-        <button className="btn btn-primary btn-sm" style={{marginBottom:8}} onClick={() => { setForm(emptyForm); setError(''); setShowModal(true) }}>
+        <button className="btn btn-primary btn-sm" style={{marginBottom:8}} onClick={openAddModal}>
           + Tambah pengguna
         </button>
+      </div>
+
+      <div className="card card-0" style={{ marginBottom: 16, padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: resetRequests.length > 0 ? 12 : 0 }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Permintaan reset password</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-600)' }}>
+              Permintaan dari guru atau siswa yang menekan Lupa password di halaman login.
+            </div>
+          </div>
+          <button className="btn btn-sm" type="button" onClick={fetchResetRequests} disabled={loadingResetRequests}>
+            {loadingResetRequests ? 'Memuat...' : 'Segarkan'}
+          </button>
+        </div>
+
+        {loadingResetRequests ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--gray-600)' }}>
+            <span className="spinner spinner-dark" /> Memuat permintaan...
+          </div>
+        ) : resetRequests.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--gray-600)' }}>Tidak ada permintaan reset password yang menunggu.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {resetRequests.map(request => (
+              <div
+                key={request.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: 12,
+                  border: 'var(--border)',
+                  borderRadius: 8,
+                  background: 'var(--gray-50)'
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{request.nama || request.identifier}</div>
+                  <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 3 }}>
+                    {request.peran === 'siswa'
+                      ? `Siswa - NIS: ${request.nis || request.identifier} - Kelas ${request.kelas || '-'}`
+                      : `Guru - ${request.email || request.identifier}`}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 3 }}>
+                    Diajukan: {new Date(request.created_at).toLocaleString('id-ID')}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    type="button"
+                    onClick={() => openPasswordModalFromRequest(request)}
+                    disabled={!request.user_id}
+                  >
+                    <KeyRound size={14} style={{ marginRight: 6 }} />
+                    Edit Password
+                  </button>
+                  <button className="btn btn-sm" type="button" onClick={() => handleResolveResetRequest(request.id)}>
+                    Tandai selesai
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Search */}
@@ -345,6 +527,10 @@ export default function PenggunaPage() {
                     <td style={{fontSize:12,color:'var(--gray-600)'}}>{new Date(u.created_at).toLocaleDateString('id-ID',{month:'short',year:'numeric'})}</td>
                     <td>
                       <div style={{display:'flex',gap:5}}>
+                        <button className="btn btn-sm" onClick={() => openEditModal(u)} title="Edit pengguna">
+                          <Pencil size={14} style={{marginRight: 6}} />
+                          Edit
+                        </button>
                         <button className="btn btn-sm" onClick={() => handleToggle(u.id)} title={u.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}>
                           <Power size={14} style={{marginRight: 6}} />
                           {u.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}

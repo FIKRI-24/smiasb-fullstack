@@ -52,7 +52,10 @@ export default api;
 // ============================================================
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
+  googleLogin: (data) => api.post('/auth/google-login', data),
   register: (data) => api.post('/auth/register', data),
+  forgotPassword: (data) => api.post('/auth/forgot-password', data),
+  resetPasswordOtp: (data) => api.post('/auth/reset-password-otp', data),
   logout: () => api.post('/auth/logout'),
   me: () => api.get('/auth/me'),
   changePassword: (data) => api.put('/auth/change-password', data),
@@ -184,6 +187,11 @@ export const userAPI = {
 
   editPassword: (id, password) =>
     api.patch(`/users/${id}/password`, { password }),
+
+  getPasswordResetRequests: () => api.get('/users/password-reset-requests'),
+
+  resolvePasswordResetRequest: (id) =>
+    api.patch(`/users/password-reset-requests/${id}/resolve`),
 
   delete: (id) => api.delete(`/users/${id}`),
 };

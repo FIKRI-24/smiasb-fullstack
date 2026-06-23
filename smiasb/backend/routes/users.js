@@ -18,9 +18,13 @@ const path = require('path');
 const fs = require('fs'); // Tambahan untuk hapus file lama
 const { getUploadDir, resolveExistingPublicUploadPath } = require('../utils/uploadPaths');
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
 async function getUserForAccess(id) {
   const [rows] = await pool.execute(
-    'SELECT id, id_sekolah, peran, foto FROM users WHERE id = ?',
+    'SELECT id, id_sekolah, peran, foto, nis, email FROM users WHERE id = ?',
     [id]
   );
 
@@ -33,6 +37,26 @@ function canAccessUserTarget(currentUser, targetUser, allowSelf = true) {
   if (allowSelf && Number(currentUser.id) === Number(targetUser.id)) return true;
 
   return isAdminRole(currentUser.peran) && sameSekolah(currentUser, targetUser.id_sekolah);
+}
+
+async function ensurePasswordResetRequestsTable() {
+  await pool.execute(
+    `CREATE TABLE IF NOT EXISTS password_reset_requests (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NULL,
+      identifier VARCHAR(191) NOT NULL,
+      peran VARCHAR(50) NULL,
+      id_sekolah BIGINT UNSIGNED NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'pending',
+      ip_address VARCHAR(80) NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      resolved_at DATETIME NULL,
+      PRIMARY KEY (id),
+      KEY idx_password_reset_user_status (user_id, status),
+      KEY idx_password_reset_school_status (id_sekolah, status),
+      KEY idx_password_reset_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
 }
 
 // ============================================================
@@ -96,6 +120,83 @@ router.get('/', authenticate, authorize('admin'), async (req, res) => {
 });
 
 // ============================================================
+// GET /api/users/password-reset-requests — permintaan reset password
+// ============================================================
+router.get('/password-reset-requests', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    await ensurePasswordResetRequestsTable();
+
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const where = ['pr.status = ?'];
+    const params = ['pending'];
+
+    const scope = appendSekolahScope(where, params, req.user, 'pr.id_sekolah', req.query.id_sekolah);
+    if (!scope.ok) return denyAccess(res);
+
+    const [rows] = await pool.query(
+      `SELECT
+         pr.id,
+         pr.user_id,
+         pr.identifier,
+         pr.peran,
+         pr.id_sekolah,
+         pr.status,
+         pr.created_at,
+         u.nama,
+         u.email,
+         u.nis,
+         u.kelas,
+         u.mata_pelajaran,
+         s.nama_sekolah
+       FROM password_reset_requests pr
+       LEFT JOIN users u ON u.id = pr.user_id
+       LEFT JOIN sekolah s ON s.id = pr.id_sekolah
+       WHERE ${where.join(' AND ')}
+       ORDER BY pr.created_at DESC
+       LIMIT ${limit}`,
+      params
+    );
+
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('Password reset request list error:', err.message);
+    return res.status(500).json({ success: false, message: 'Gagal mengambil permintaan reset password.' });
+  }
+});
+
+// ============================================================
+// PATCH /api/users/password-reset-requests/:id/resolve
+// ============================================================
+router.patch('/password-reset-requests/:id/resolve', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    await ensurePasswordResetRequestsTable();
+
+    const [rows] = await pool.execute(
+      'SELECT id, id_sekolah FROM password_reset_requests WHERE id = ?',
+      [req.params.id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Permintaan reset password tidak ditemukan.' });
+    }
+
+    if (!isSuperAdmin(req.user) && !sameSekolah(req.user, rows[0].id_sekolah)) {
+      return denyAccess(res);
+    }
+
+    await pool.execute(
+      'UPDATE password_reset_requests SET status = "resolved", resolved_at = NOW() WHERE id = ?',
+      [req.params.id]
+    );
+
+    return res.json({ success: true, message: 'Permintaan reset password ditandai selesai.' });
+  } catch (err) {
+    console.error('Password reset request resolve error:', err.message);
+    return res.status(500).json({ success: false, message: 'Gagal memperbarui permintaan reset password.' });
+  }
+});
+
+// ============================================================
 // GET /api/users/:id
 // ============================================================
 router.get('/:id', authenticate, async (req, res) => {
@@ -123,9 +224,16 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, authorize('admin'), [
   body('nama').trim().notEmpty().withMessage('Nama wajib diisi'),
   body('email')
-    .if((value, { req }) => req.body.peran !== 'siswa')
-    .isEmail()
-    .withMessage('Email tidak valid'),
+    .custom((value, { req }) => {
+      const peran = req.body.peran === 'admin' ? 'admin_sekolah' : req.body.peran;
+      const email = String(value || '').trim();
+
+      if (peran === 'guru' && !isValidEmail(email)) {
+        throw new Error('Email guru wajib diisi dengan format yang valid.');
+      }
+
+      return true;
+    }),
   body('nis')
     .if((value, { req }) => req.body.peran === 'siswa')
     .trim()
@@ -139,7 +247,9 @@ router.post('/', authenticate, authorize('admin'), [
 
   const { nama, email, password, peran, mata_pelajaran, nip, kelas, nis, id_sekolah } = req.body;
   const normalizedPeran = peran === 'admin' ? 'admin_sekolah' : peran;
-  const normalizedEmail = normalizedPeran === 'siswa' ? null : String(email).trim().toLowerCase();
+  const normalizedEmail = normalizedPeran === 'siswa'
+    ? null
+    : (String(email || '').trim().toLowerCase() || null);
   const normalizedNis = normalizedPeran === 'siswa' ? String(nis).trim() : null;
   const normalizedSiswaKelas = normalizedPeran === 'siswa' ? normalizeKelas(kelas) : null;
   const targetSekolah = resolveTargetSekolahId(req.user, id_sekolah);
@@ -149,8 +259,8 @@ router.post('/', authenticate, authorize('admin'), [
   }
 
   try {
-    if (normalizedPeran !== 'siswa') {
-      const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
+    if (normalizedEmail) {
+      const [existing] = await pool.execute('SELECT id FROM users WHERE LOWER(email) = ?', [normalizedEmail]);
       if (existing.length > 0) return res.status(409).json({ success: false, message: 'Email sudah terdaftar.' });
     }
 
@@ -185,21 +295,100 @@ router.post('/', authenticate, authorize('admin'), [
 // PUT /api/users/:id — update pengguna
 // ============================================================
 router.put('/:id', authenticate, async (req, res) => {
-  const { nama, mata_pelajaran, nip, kelas, nis } = req.body;
+  const { nama, email, mata_pelajaran, nip, kelas, nis } = req.body;
 
   try {
     const targetUser = await getUserForAccess(req.params.id);
     if (!targetUser) return res.status(404).json({ success: false, message: 'Pengguna tidak ditemukan.' });
     if (!canAccessUserTarget(req.user, targetUser, true)) return denyAccess(res);
+    if (!String(nama || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Nama wajib diisi.' });
+    }
 
     const normalizedUserKelas =
       kelas !== undefined && kelas !== null && String(kelas).trim() !== ''
         ? normalizeKelas(kelas)
         : null;
+    let finalNis = null;
+    let finalEmail = targetUser.email || null;
+
+    if (targetUser.peran === 'guru') {
+      const requestedEmail = email !== undefined
+        ? String(email || '').trim().toLowerCase()
+        : String(targetUser.email || '').trim().toLowerCase();
+
+      if (!isValidEmail(requestedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email guru wajib diisi dengan format yang valid.'
+        });
+      }
+
+      const [existingEmail] = await pool.execute(
+        'SELECT id FROM users WHERE LOWER(email) = ? AND id <> ?',
+        [requestedEmail, req.params.id]
+      );
+
+      if (existingEmail.length > 0) {
+        return res.status(409).json({
+          success: false,
+          message: 'Email sudah terdaftar.'
+        });
+      }
+
+      finalEmail = requestedEmail;
+    } else if (['admin', 'admin_sekolah'].includes(targetUser.peran) && email !== undefined) {
+      const requestedEmail = String(email || '').trim().toLowerCase();
+      finalEmail = requestedEmail || null;
+
+      if (finalEmail) {
+        const [existingEmail] = await pool.execute(
+          'SELECT id FROM users WHERE LOWER(email) = ? AND id <> ?',
+          [finalEmail, req.params.id]
+        );
+
+        if (existingEmail.length > 0) {
+          return res.status(409).json({
+            success: false,
+            message: 'Email/username sudah digunakan.'
+          });
+        }
+      }
+    }
+
+    if (targetUser.peran === 'siswa') {
+      const currentNis = targetUser.nis ? String(targetUser.nis).trim() : '';
+      const requestedNis = nis !== undefined && nis !== null ? String(nis).trim() : '';
+
+      if (currentNis) {
+        if (requestedNis && requestedNis !== currentNis) {
+          return res.status(400).json({
+            success: false,
+            message: 'NIS siswa yang sudah terdaftar tidak dapat diubah. Gunakan NIS yang berbeda saat membuat akun baru.'
+          });
+        }
+
+        finalNis = currentNis;
+      } else if (requestedNis) {
+        const [existingNis] = await pool.execute(
+          'SELECT id FROM users WHERE nis = ? AND peran = "siswa" AND id <> ?',
+          [requestedNis, req.params.id]
+        );
+
+        if (existingNis.length > 0) {
+          return res.status(409).json({
+            success: false,
+            message: 'NIS sudah terdaftar. Gunakan NIS yang berbeda.'
+          });
+        }
+
+        finalNis = requestedNis;
+      }
+    }
 
     await pool.execute(
-      'UPDATE users SET nama=?, mata_pelajaran=?, nip=?, kelas=?, nis=? WHERE id=?',
-      [nama, mata_pelajaran||null, nip||null, normalizedUserKelas, nis||null, req.params.id]
+      'UPDATE users SET nama=?, email=?, mata_pelajaran=?, nip=?, kelas=?, nis=? WHERE id=?',
+      [String(nama).trim(), finalEmail, mata_pelajaran||null, nip||null, normalizedUserKelas, finalNis, req.params.id]
     );
     return res.json({ success: true, message: 'Profil berhasil diperbarui.' });
   } catch (err) {
@@ -246,6 +435,13 @@ async function updateManagedUserPassword(req, res) {
 
     const hashed = await bcrypt.hash(newPass, 10);
     await pool.execute('UPDATE users SET password = ? WHERE id = ?', [hashed, req.params.id]);
+
+    await ensurePasswordResetRequestsTable();
+    await pool.execute(
+      'UPDATE password_reset_requests SET status = "resolved", resolved_at = NOW() WHERE user_id = ? AND status = "pending"',
+      [req.params.id]
+    );
+
     return res.json({ success: true, message: 'Password pengguna berhasil diperbarui.' });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Terjadi kesalahan server.' });

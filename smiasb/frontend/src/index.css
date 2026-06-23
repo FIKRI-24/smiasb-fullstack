@@ -3142,6 +3142,7 @@ tbody tr:hover td { background: #F8F9FA; }
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 14px;
+  min-height: 34px;
   color: #475569;
   font-size: 13px;
 }
@@ -3165,14 +3166,16 @@ tbody tr:hover td { background: #F8F9FA; }
   justify-content: space-between;
   gap: 12px;
   margin-top: auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding-top: 16px;
   border-top: 1px solid rgba(226, 232, 240, 0.95);
 }
 
 .monitoring-list-card-info {
+  min-width: 0;
   color: #475569;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .monitoring-list-card-info strong {
@@ -3183,7 +3186,8 @@ tbody tr:hover td { background: #F8F9FA; }
 }
 
 .monitoring-list-card-button {
-  min-width: 124px;
+  flex: 0 0 136px;
+  justify-content: center;
   padding: 10px 16px;
   border-radius: 999px;
 }
@@ -3262,6 +3266,20 @@ tbody tr:hover td { background: #F8F9FA; }
 @media (max-width: 540px) {
   .monitoring-list-card {
     padding: 18px;
+  }
+
+  .monitoring-list-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .monitoring-list-card-info {
+    white-space: normal;
+  }
+
+  .monitoring-list-card-button {
+    flex-basis: auto;
+    width: 100%;
   }
 
   .monitoring-list-filter-item {

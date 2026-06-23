@@ -475,6 +475,72 @@ export default function KerjakanSoalPage() {
     )
   }
 
+  const normalizeComparableQuestionText = (value = '') => (
+    stripHtml(String(value || ''))
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase()
+  )
+
+  const isEmptyQuestionContent = (value = '') => (
+    !normalizeComparableQuestionText(value) && !/<(img|table)\b/i.test(String(value || ''))
+  )
+
+  const wrapSebabAkibatQuestionPart = (value = '', label = '') => {
+    if (isEmptyQuestionContent(value)) return ''
+    const body = String(value || '').trim()
+    return label
+      ? `<div><strong>${label}</strong><br>${body}</div>`
+      : `<div>${body}</div>`
+  }
+
+  const isGenericSebabAkibatPrompt = (value = '') => {
+    const text = normalizeComparableQuestionText(value)
+      .replace(/^\d+\s*[.)]\s*/, '')
+      .replace(/[.!?]+$/g, '')
+      .trim()
+
+    return (
+      /^bacalah\s+pernyataan\s+berikut/i.test(text) ||
+      /^perhatikan\s+pernyataan\s+berikut/i.test(text)
+    )
+  }
+
+  const cleanSebabAkibatQuestionBoilerplate = (value = '') => (
+    String(value || '')
+      .replace(/^\s*(?:\d+\s*[.)]\s*)?Bacalah\s+pernyataan\s+berikut(?:\s+ini)?\s+dengan\s+cermat!?\s*/i, '')
+      .replace(/\s*Pilihlah\s+jawaban\s+yang\s+paling\s+tepat\s+dari\s+pernyataan\s+di\s+atas\.?\s*/gi, '\n')
+      .replace(/^\s*Pernyataan\s*:\s*/i, '')
+      .trim()
+  )
+
+  const buildSebabAkibatQuestionText = (soalItem = {}) => {
+    const rawBaseQuestion = soalItem.pertanyaan || ''
+    if (soalItem.tipe_soal !== 'sebab_akibat') return rawBaseQuestion
+    const baseQuestion = cleanSebabAkibatQuestionBoilerplate(rawBaseQuestion)
+
+    const pernyataan = isSebabAkibatAnswerTemplate(soalItem.pilihan_a) ? '' : (soalItem.pilihan_a || '')
+    const sebab = isSebabAkibatAnswerTemplate(soalItem.pilihan_b) ? '' : (soalItem.pilihan_b || '')
+    const hasLegacyParts = !isEmptyQuestionContent(pernyataan) || !isEmptyQuestionContent(sebab)
+    const displayBaseQuestion = hasLegacyParts && isGenericSebabAkibatPrompt(baseQuestion) ? '' : baseQuestion
+    const baseComparable = normalizeComparableQuestionText(displayBaseQuestion)
+    const additions = []
+
+    const pernyataanComparable = normalizeComparableQuestionText(pernyataan)
+    if (pernyataanComparable && !baseComparable.includes(pernyataanComparable)) {
+      additions.push(wrapSebabAkibatQuestionPart(pernyataan))
+    }
+
+    const sebabComparable = normalizeComparableQuestionText(sebab)
+    if (sebabComparable && !baseComparable.includes(sebabComparable)) {
+      additions.push(wrapSebabAkibatQuestionPart(sebab, 'SEBAB:'))
+    }
+
+    return [displayBaseQuestion, ...additions]
+      .filter(value => !isEmptyQuestionContent(value))
+      .join('\n')
+  }
+
   const getMatchingLabel = (opt, index) => {
     if (opt && typeof opt === 'object') {
       return String(opt.label || String.fromCharCode(97 + index)).toLowerCase()
@@ -755,6 +821,11 @@ export default function KerjakanSoalPage() {
           return (
             <div key={gambarIndex} style={{ display: 'flex', justifyContent: justifyByAlign(align), textAlign: align }}>
               <figure style={{ width, maxWidth: '100%', margin: 0 }}>
+                {caption && (
+                  <figcaption style={{ marginBottom: 6, fontSize: 12, color: '#64748B', textAlign: 'left' }}>
+                    {renderRichInline(caption)}
+                  </figcaption>
+                )}
                 <img
                   className="question-image-clickable"
                   src={imageSrc}
@@ -778,11 +849,6 @@ export default function KerjakanSoalPage() {
                     e.target.src = 'https://via.placeholder.com/400x200?text=Gambar+Tidak+Ditemukan'
                   }}
                 />
-                {caption && (
-                  <figcaption style={{ marginTop: 6, fontSize: 12, color: '#64748B' }}>
-                    {renderRichInline(caption)}
-                  </figcaption>
-                )}
               </figure>
             </div>
           )
@@ -794,7 +860,7 @@ export default function KerjakanSoalPage() {
   const renderQuestionLayoutBlock = (soalItem, block, visibleTabelData) => {
     const metadata = getLayoutMetadata(soalItem)
 
-    if (block.type === 'question') return renderQuestionText(soalItem.pertanyaan)
+    if (block.type === 'question') return renderQuestionText(buildSebabAkibatQuestionText(soalItem))
     if (block.type === 'stimulus') return renderQuestionText(soalItem.stimulus_tambahan || metadata?.stimulus_tambahan || '')
     if (block.type === 'image') return renderGambarData(soalItem)
     if (block.type === 'table') return renderTabelData(visibleTabelData)
@@ -1159,10 +1225,6 @@ export default function KerjakanSoalPage() {
           const jawabanValue = jawaban[s.id]
           const visibleTabelData = getVisibleTabelData(s)
           const layoutBlocks = getQuestionLayoutBlocks(s, visibleTabelData)
-          const sebabAkibatPernyataan = isSebabAkibatAnswerTemplate(s.pilihan_a) ? '' : (s.pilihan_a || '')
-          const sebabAkibatSebab = isSebabAkibatAnswerTemplate(s.pilihan_b) ? '' : (s.pilihan_b || '')
-          const showSebabAkibatParts =
-            stripHtml(sebabAkibatPernyataan).trim() || stripHtml(sebabAkibatSebab).trim()
           
           return (
             <div key={s.id} className="card" style={{ marginBottom: 16 }}>
@@ -1210,18 +1272,6 @@ export default function KerjakanSoalPage() {
             {/* SEBAB AKIBAT */}
             {s.tipe_soal === 'sebab_akibat' && (
               <div>
-                {showSebabAkibatParts && (
-                  <div style={{ background: '#F3F4F6', padding: 12, borderRadius: 8, marginBottom: 12 }}>
-                    {stripHtml(sebabAkibatPernyataan).trim() && (
-                      <div style={{ marginBottom: stripHtml(sebabAkibatSebab).trim() ? 8 : 0 }}>
-                        <strong>Pernyataan:</strong> {renderRichInline(sebabAkibatPernyataan)}
-                      </div>
-                    )}
-                    {stripHtml(sebabAkibatSebab).trim() && (
-                      <div><strong>Sebab:</strong> {renderRichInline(sebabAkibatSebab)}</div>
-                    )}
-                  </div>
-                )}
                 <select className="select" value={jawabanValue || ''} 
                   onChange={(e) => handleChange(s.id, e.target.value, s.tipe_soal)}
                   style={{ width: '100%', padding: 10 }}>

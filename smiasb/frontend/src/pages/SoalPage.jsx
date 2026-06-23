@@ -72,6 +72,7 @@ const SoalPage = () => {
     jawaban_benar: "A", jawaban_benar_json: [],
     tipe_soal: "pilihan_ganda", kategori_instrumen: "HOTS", bobot: 1,
     tabel_data: "", supporting_tables: [], pernyataan_checklist: [],
+    gambar_caption: "",
     stimulus_tambahan: "",
     stimulusBold: false,
     stimulusFontSize: '16px',
@@ -250,6 +251,10 @@ const SoalPage = () => {
     setForm(prev => {
       const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
       if (name === 'tipe_soal' && value === 'sebab_akibat') {
+        next.pilihan_a = '';
+        next.pilihan_b = '';
+        next.pilihan_c = '';
+        next.pilihan_d = '';
         next.pilihan_e = '';
         if (next.jawaban_benar === 'E') next.jawaban_benar = '';
       }
@@ -656,6 +661,10 @@ const SoalPage = () => {
         next.supporting_tables = [];
       }
 
+      if (type === 'image') {
+        next.gambar_caption = '';
+      }
+
       return next;
     });
 
@@ -698,7 +707,13 @@ const SoalPage = () => {
       align: form.stimulusAlign
     });
     const hasStimulus = stimulusText.trim() !== '';
-    const shouldIncludeLayout = hasStimulus || !isDefaultLayoutOrder(blocks) || supportingTables.length > 0;
+    const hasImage = blocks.some(block => block.type === 'image') && Boolean(previewGambar) && !removeGambarSoal;
+    const shouldIncludeLayout = hasStimulus || hasImage || !isDefaultLayoutOrder(blocks) || supportingTables.length > 0;
+    const imageCaptionText = parsePlainTextValue(form.gambar_caption || '');
+    const imageCaption = buildStyledHtml(imageCaptionText, {
+      fontSize: '14px',
+      align: 'left'
+    });
 
     const nextTables = supportingTables.map((table) => ({
       ...table,
@@ -715,7 +730,16 @@ const SoalPage = () => {
         role: 'layout_blocks',
         type: 'layout_blocks',
         layout_blocks: blocks,
-        stimulus_tambahan: stimulus
+        stimulus_tambahan: stimulus,
+        gambar: hasImage ? [{
+          source: 'manual',
+          role: 'image',
+          caption: imageCaption,
+          alt: imageCaptionText,
+          ukuran: 'sedang',
+          width: '75%',
+          align: 'center'
+        }] : []
       });
     }
 
@@ -848,6 +872,7 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       jawaban_benar: "A", jawaban_benar_json: [],
       tipe_soal: "pilihan_ganda", kategori_instrumen: "HOTS", bobot: 1,
       tabel_data: "", supporting_tables: [], pernyataan_checklist: [],
+      gambar_caption: "",
       stimulus_tambahan: "",
       stimulusBold: false,
       stimulusFontSize: '16px',
@@ -872,6 +897,7 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       align: 'left'
     });
     const supportingTables = parseSupportingTablesFromTabelData(soalItem.tabel_data || []);
+    const imageMetadata = Array.isArray(layoutMetadata?.gambar) ? layoutMetadata.gambar[0] : null;
     const initialLayoutBlocks = normalizeManualLayoutBlocks(layoutMetadata?.layout_blocks || defaultLayoutBlocks);
     const ensureInitialBlock = (blocks, type) => {
       const definition = getLayoutBlockDefinition(type);
@@ -904,6 +930,7 @@ if (form.tipe_soal === "menjodohkan" && (!form.pasangan_menjodohkan.kolom_kiri |
       tabel_data: stringifyTabelData(soalItem.tabel_data || ""),
       supporting_tables: supportingTables,
       pernyataan_checklist: pernyataanChecklist,
+      gambar_caption: parsePlainTextValue(imageMetadata?.caption || imageMetadata?.alt || ""),
       stimulus_tambahan: stimulusControl.text,
       stimulusBold: stimulusControl.bold,
       stimulusFontSize: stimulusControl.fontSize,
@@ -1354,15 +1381,33 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 <input type="file" accept="image/*" onChange={handleGambarChange}
                   style={{ fontSize: 13, color: 'var(--gray-600)', flex: 1, minWidth: 180 }} />
                 {previewGambar && (
-                  <img
-                    src={previewGambar}
-                    alt="Preview"
-                    className="question-image-clickable"
-                    title="Klik untuk memperbesar gambar"
-                    onClick={openPreviewImageZoom}
-                    style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.1)' }}
-                  />
+                  <figure style={{ margin: 0, width: 120, maxWidth: '100%' }}>
+                    {form.gambar_caption && (
+                      <figcaption style={{ marginBottom: 6, fontSize: 12, color: '#64748B', textAlign: 'left' }}>
+                        {form.gambar_caption}
+                      </figcaption>
+                    )}
+                    <img
+                      src={previewGambar}
+                      alt="Preview"
+                      className="question-image-clickable"
+                      title="Klik untuk memperbesar gambar"
+                      onClick={openPreviewImageZoom}
+                      style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.1)' }}
+                    />
+                  </figure>
                 )}
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <label className="form-label">Caption Gambar</label>
+                <input
+                  type="text"
+                  name="gambar_caption"
+                  className="input"
+                  value={form.gambar_caption}
+                  onChange={handleChange}
+                  placeholder="Caption gambar (opsional)"
+                />
               </div>
             </div>
             )}
@@ -1641,8 +1686,8 @@ Yakin ingin mengaktifkan instrumen ini?`,
               </div>
             </div>
 
-            {/* Pilihan jawaban - untuk PG, Sebab Akibat, Ganda Kompleks */}
-            {!['benar_salah', 'menjodohkan'].includes(form.tipe_soal) && (
+            {/* Pilihan jawaban - untuk PG dan Ganda Kompleks */}
+            {['pilihan_ganda', 'ganda_kompleks'].includes(form.tipe_soal) && (
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                   Pilihan Jawaban
@@ -2207,6 +2252,11 @@ Yakin ingin mengaktifkan instrumen ini?`,
               </div>
             </div>
             <div className="image-zoom-preview">
+              {form.gambar_caption && (
+                <div style={{ alignSelf: 'stretch', marginBottom: 8, fontSize: 13, color: '#64748B', textAlign: 'left' }}>
+                  {form.gambar_caption}
+                </div>
+              )}
               <img
                 src={zoomPreviewImage}
                 alt="Preview gambar soal"

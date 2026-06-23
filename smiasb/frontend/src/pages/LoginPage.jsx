@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -13,13 +13,47 @@ const getRedirectPath = (peran) => {
   return '/dashboard'
 }
 
+const loadGoogleIdentityScript = () => new Promise((resolve, reject) => {
+  if (window.google?.accounts?.id) {
+    resolve()
+    return
+  }
+
+  const existingScript = document.getElementById('google-identity-services')
+
+  if (existingScript) {
+    existingScript.addEventListener('load', resolve, { once: true })
+    existingScript.addEventListener('error', reject, { once: true })
+    return
+  }
+
+  const script = document.createElement('script')
+  script.id = 'google-identity-services'
+  script.src = 'https://accounts.google.com/gsi/client'
+  script.async = true
+  script.defer = true
+  script.onload = resolve
+  script.onerror = reject
+  document.head.appendChild(script)
+})
+
 export default function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
+  const googleButtonRef = useRef(null)
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   const [form, setForm] = useState({ identifier: '', password: '' })
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [googleScriptError, setGoogleScriptError] = useState('')
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [forgotOpen, setForgotOpen] = useState(false)
+  const [forgotIdentifier, setForgotIdentifier] = useState('')
+  const [forgotLoading, setForgotLoading] = useState(false)
+  const [forgotMessage, setForgotMessage] = useState({ type: '', text: '' })
+  const [forgotStep, setForgotStep] = useState('request')
+  const [otpForm, setOtpForm] = useState({ otp: '', password_baru: '', konfirmasi: '' })
 
   useEffect(() => {
     const sessionMessage = localStorage.getItem('iap_session_message')
@@ -29,7 +63,159 @@ export default function LoginPage() {
     }
   }, [])
 
+  const handleGoogleCredential = useCallback(async (response) => {
+    const credential = response?.credential
+
+    if (!credential) {
+      setError('Login Google gagal. Credential tidak ditemukan.')
+      return
+    }
+
+    setError('')
+    setGoogleLoading(true)
+
+    try {
+      const res = await authAPI.googleLogin({ credential })
+      const { token, user } = res.data.data
+      await login(token, user)
+      navigate(getRedirectPath(user?.peran), { replace: true })
+    } catch (err) {
+      setError(err.response?.data?.message || 'Login Google gagal. Pastikan akun guru sudah terdaftar oleh admin sekolah.')
+    } finally {
+      setGoogleLoading(false)
+    }
+  }, [login, navigate])
+
+  useEffect(() => {
+    if (!googleClientId) return undefined
+
+    let cancelled = false
+
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (cancelled || !googleButtonRef.current || !window.google?.accounts?.id) return
+
+        setGoogleScriptError('')
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleCredential,
+        })
+
+        googleButtonRef.current.innerHTML = ''
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          theme: 'outline',
+          size: 'large',
+          shape: 'rectangular',
+          text: 'signin_with',
+          width: googleButtonRef.current.offsetWidth || 350,
+        })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGoogleScriptError('Tombol Login Google belum dapat dimuat.')
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [googleClientId, handleGoogleCredential])
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const openForgotPassword = () => {
+    setForgotIdentifier(form.identifier.trim())
+    setForgotMessage({ type: '', text: '' })
+    setForgotStep('request')
+    setOtpForm({ otp: '', password_baru: '', konfirmasi: '' })
+    setForgotOpen(true)
+  }
+
+  const closeForgotPassword = () => {
+    if (forgotLoading) return
+    setForgotOpen(false)
+  }
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault()
+    setForgotMessage({ type: '', text: '' })
+
+    if (!forgotIdentifier.trim()) {
+      setForgotMessage({ type: 'error', text: 'Email atau NIS wajib diisi.' })
+      return
+    }
+
+    setForgotLoading(true)
+    try {
+      const res = await authAPI.forgotPassword({
+        identifier: forgotIdentifier.trim(),
+      })
+      const mode = res.data?.mode
+
+      if (mode === 'otp') {
+        setForgotStep('otp')
+        setOtpForm({ otp: '', password_baru: '', konfirmasi: '' })
+      }
+
+      setForgotMessage({
+        type: 'success',
+        text: res.data?.message || 'Permintaan reset password sudah dicatat. Silakan hubungi admin sekolah.'
+      })
+    } catch (err) {
+      const validationMessage = err.response?.data?.errors?.[0]?.msg
+      setForgotMessage({
+        type: 'error',
+        text: validationMessage || err.response?.data?.message || 'Permintaan reset password belum dapat diproses.'
+      })
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  const handleResetPasswordOtp = async (e) => {
+    e.preventDefault()
+    setForgotMessage({ type: '', text: '' })
+
+    if (!otpForm.otp.trim() || otpForm.otp.trim().length !== 6) {
+      setForgotMessage({ type: 'error', text: 'OTP harus diisi 6 digit.' })
+      return
+    }
+
+    if (otpForm.password_baru.length < 6) {
+      setForgotMessage({ type: 'error', text: 'Password baru minimal 6 karakter.' })
+      return
+    }
+
+    if (otpForm.password_baru !== otpForm.konfirmasi) {
+      setForgotMessage({ type: 'error', text: 'Konfirmasi password tidak cocok.' })
+      return
+    }
+
+    setForgotLoading(true)
+    try {
+      const res = await authAPI.resetPasswordOtp({
+        identifier: forgotIdentifier.trim(),
+        otp: otpForm.otp.trim(),
+        password_baru: otpForm.password_baru,
+      })
+
+      setForgotMessage({
+        type: 'success',
+        text: res.data?.message || 'Password berhasil diubah. Silakan login menggunakan password baru.'
+      })
+      setForm(f => ({ ...f, identifier: forgotIdentifier.trim(), password: '' }))
+      setOtpForm({ otp: '', password_baru: '', konfirmasi: '' })
+      setForgotStep('done')
+    } catch (err) {
+      const validationMessage = err.response?.data?.errors?.[0]?.msg
+      setForgotMessage({
+        type: 'error',
+        text: validationMessage || err.response?.data?.message || 'Password belum dapat diubah.'
+      })
+    } finally {
+      setForgotLoading(false)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -197,12 +383,115 @@ export default function LoginPage() {
           margin-bottom: 24px;
         }
         .iap-forgot {
+          border: none;
+          background: transparent;
+          padding: 0;
           font-size: 12px;
           color: #6B7280;
           cursor: pointer;
           transition: color 0.15s;
+          font-family: inherit;
         }
         .iap-forgot:hover { color: #1A56C4; }
+        .iap-modal-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 50;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          background: rgba(15, 23, 42, 0.42);
+          backdrop-filter: blur(4px);
+        }
+        .iap-modal {
+          width: min(100%, 420px);
+          background: #ffffff;
+          border-radius: 18px;
+          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+          border: 1px solid rgba(15, 23, 42, 0.08);
+          padding: 24px;
+        }
+        .iap-modal-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+        .iap-modal-title {
+          margin: 0 0 6px;
+          font-size: 18px;
+          font-weight: 800;
+          color: #111827;
+        }
+        .iap-modal-subtitle {
+          margin: 0;
+          font-size: 13px;
+          line-height: 1.55;
+          color: #6B7280;
+        }
+        .iap-modal-close {
+          width: 30px;
+          height: 30px;
+          border: none;
+          border-radius: 999px;
+          background: #F3F4F6;
+          color: #4B5563;
+          cursor: pointer;
+          font-size: 18px;
+          line-height: 1;
+        }
+        .iap-modal-alert {
+          border-radius: 10px;
+          padding: 10px 12px;
+          margin-bottom: 14px;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+        .iap-modal-alert.success {
+          background: #ECFDF5;
+          border: 1px solid #A7F3D0;
+          color: #047857;
+        }
+        .iap-modal-alert.error {
+          background: #FEF2F2;
+          border: 1px solid #FCA5A5;
+          color: #B91C1C;
+        }
+        .iap-modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-top: 18px;
+        }
+        .iap-secondary-btn {
+          height: 40px;
+          padding: 0 14px;
+          border-radius: 10px;
+          border: 1px solid #E5E7EB;
+          background: #ffffff;
+          color: #374151;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .iap-primary-btn {
+          height: 40px;
+          padding: 0 16px;
+          border-radius: 10px;
+          border: none;
+          background: #1A56C4;
+          color: #ffffff;
+          font-size: 13px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .iap-primary-btn:disabled,
+        .iap-secondary-btn:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+        }
         .iap-btn {
           width: 100%;
           height: 46px;
@@ -223,6 +512,40 @@ export default function LoginPage() {
         .iap-btn:disabled {
           cursor: not-allowed;
           opacity: 0.7;
+        }
+        .iap-login-divider {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin: 18px 0;
+          color: #9CA3AF;
+          font-size: 11px;
+          font-weight: 700;
+        }
+        .iap-login-divider::before,
+        .iap-login-divider::after {
+          content: "";
+          height: 1px;
+          flex: 1;
+          background: #E5E7EB;
+        }
+        .iap-google-box {
+          width: 100%;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .iap-google-status {
+          margin-top: 10px;
+          min-height: 16px;
+          font-size: 12px;
+          line-height: 1.4;
+          color: #6B7280;
+          text-align: center;
+        }
+        .iap-google-status.error {
+          color: #B91C1C;
         }
         .iap-spinner {
           width: 18px;
@@ -245,6 +568,148 @@ export default function LoginPage() {
           .iap-login-hero { padding: 22px; }
         }
       `}</style>
+
+      {forgotOpen && (
+        <div className="iap-modal-overlay" onClick={e => e.target === e.currentTarget && closeForgotPassword()}>
+          <div className="iap-modal">
+            <div className="iap-modal-head">
+              <div>
+                <h2 className="iap-modal-title">Lupa password</h2>
+                <p className="iap-modal-subtitle">
+                  Guru dapat reset mandiri memakai OTP email. Siswa tetap mengirim permintaan reset ke admin sekolah.
+                </p>
+              </div>
+              <button className="iap-modal-close" type="button" onClick={closeForgotPassword} disabled={forgotLoading} aria-label="Tutup">
+                x
+              </button>
+            </div>
+
+            {forgotMessage.text && (
+              <div className={`iap-modal-alert ${forgotMessage.type === 'success' ? 'success' : 'error'}`}>
+                {forgotMessage.text}
+              </div>
+            )}
+
+            {forgotStep === 'request' && (
+              <form onSubmit={handleForgotPassword}>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 6 }}>
+                  Email guru / NIS siswa
+                </label>
+                <div className="iap-field" style={{
+                  display: 'flex', alignItems: 'center',
+                  border: '1px solid #E5E7EB', borderRadius: 8,
+                  padding: '0 14px', height: 42, background: '#F9FAFB',
+                  transition: 'border-color 0.15s',
+                }}>
+                  <input
+                    className="iap-input"
+                    type="text"
+                    placeholder="Masukkan email guru atau NIS siswa"
+                    value={forgotIdentifier}
+                    onChange={e => setForgotIdentifier(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="iap-modal-actions">
+                  <button className="iap-secondary-btn" type="button" onClick={closeForgotPassword} disabled={forgotLoading}>
+                    Batal
+                  </button>
+                  <button className="iap-primary-btn" type="submit" disabled={forgotLoading}>
+                    {forgotLoading ? 'Memproses...' : 'Lanjutkan'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {forgotStep === 'otp' && (
+              <form onSubmit={handleResetPasswordOtp}>
+                <div style={{ display: 'grid', gap: 12 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 6 }}>
+                      Kode OTP
+                    </label>
+                    <div className="iap-field" style={{
+                      display: 'flex', alignItems: 'center',
+                      border: '1px solid #E5E7EB', borderRadius: 8,
+                      padding: '0 14px', height: 42, background: '#F9FAFB',
+                      transition: 'border-color 0.15s',
+                    }}>
+                      <input
+                        className="iap-input"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="6 digit OTP"
+                        value={otpForm.otp}
+                        onChange={e => setOtpForm(f => ({ ...f, otp: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 6 }}>
+                      Password baru
+                    </label>
+                    <div className="iap-field" style={{
+                      display: 'flex', alignItems: 'center',
+                      border: '1px solid #E5E7EB', borderRadius: 8,
+                      padding: '0 14px', height: 42, background: '#F9FAFB',
+                      transition: 'border-color 0.15s',
+                    }}>
+                      <input
+                        className="iap-input"
+                        type="password"
+                        placeholder="Min. 6 karakter"
+                        value={otpForm.password_baru}
+                        onChange={e => setOtpForm(f => ({ ...f, password_baru: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 6 }}>
+                      Konfirmasi password
+                    </label>
+                    <div className="iap-field" style={{
+                      display: 'flex', alignItems: 'center',
+                      border: '1px solid #E5E7EB', borderRadius: 8,
+                      padding: '0 14px', height: 42, background: '#F9FAFB',
+                      transition: 'border-color 0.15s',
+                    }}>
+                      <input
+                        className="iap-input"
+                        type="password"
+                        placeholder="Ulangi password baru"
+                        value={otpForm.konfirmasi}
+                        onChange={e => setOtpForm(f => ({ ...f, konfirmasi: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="iap-modal-actions">
+                  <button className="iap-secondary-btn" type="button" onClick={() => setForgotStep('request')} disabled={forgotLoading}>
+                    Kembali
+                  </button>
+                  <button className="iap-primary-btn" type="submit" disabled={forgotLoading}>
+                    {forgotLoading ? 'Menyimpan...' : 'Ubah password'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {forgotStep === 'done' && (
+              <div className="iap-modal-actions">
+                <button className="iap-primary-btn" type="button" onClick={closeForgotPassword}>
+                  Tutup
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="iap-login-root">
         <div className="iap-login-card">
@@ -355,7 +820,9 @@ export default function LoginPage() {
 
             {/* Lupa password */}
             <div className="iap-footer">
-              <span className="iap-forgot">Lupa password?</span>
+              <button className="iap-forgot" type="button" onClick={openForgotPassword}>
+                Lupa password?
+              </button>
             </div>
 
             {/* Tombol masuk */}
@@ -377,6 +844,16 @@ export default function LoginPage() {
             >
               {loading ? <span className="iap-spinner" /> : 'Masuk'}
             </button>
+
+            {googleClientId && (
+              <>
+                <div className="iap-login-divider">ATAU</div>
+                <div className="iap-google-box" ref={googleButtonRef} />
+                <div className={`iap-google-status ${googleScriptError ? 'error' : ''}`}>
+                  {googleLoading ? 'Memproses login Google...' : googleScriptError}
+                </div>
+              </>
+            )}
           </form>
         </div>
 
