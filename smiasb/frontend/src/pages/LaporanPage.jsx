@@ -15,11 +15,13 @@ import {
   MoreVertical, Moon, UserCircle,
   Eye, X
 } from 'lucide-react'
+import ActionIcon from '../components/ActionIcon'
 
 export default function LaporanPage() {
   const { user } = useAuth()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [exportingReport, setExportingReport] = useState(false)
   const [activeReportTab, setActiveReportTab] = useState('dashboard')
   const [selectedPeriod, setSelectedPeriod] = useState('bulan')
   const [dateRange, setDateRange] = useState({ start: '', end: '' })
@@ -174,27 +176,30 @@ export default function LaporanPage() {
 
   const COLORS = ['#465fff', '#7592ff', '#12b76a', '#f79009', '#f04438', '#7a5af8', '#06aed4', '#17b26a']
 
-  const exportToCSV = () => {
-    const statsData = [
-      ['Metrik', 'Nilai'],
-      ['Total Instrumen', stats.totalInstrumen || 0],
-      ['Instrumen Aktif', stats.instrumenAktif || 0],
-      ['Total Guru', stats.totalGuru || 0],
-      ['Total Siswa', stats.totalSiswa || 0],
-      ['Total Chat', chatbot.totalChat || 0],
-      ['Pertanyaan Unik', chatbot.uniqueQuestion || 0],
-      ['Error AI', chatbot.errorAI || 0]
-    ]
+  const exportReportExcel = async () => {
+    setExportingReport(true)
 
-    const statsCSV = statsData.map(row => row.join(',')).join('\n')
-    const blob = new Blob([statsCSV], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = `laporan_dashboard_${new Date().toISOString().split('T')[0]}.csv`
-    link.click()
-    URL.revokeObjectURL(link.href)
+    try {
+      const res = await laporanAPI.exportExcel()
+      const blob = new Blob([res.data], {
+        type: res.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = getReportDownloadFilename(res.headers['content-disposition'])
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
 
-    showNotification('Laporan berhasil diexport ke CSV', 'success')
+      showNotification('Laporan Excel lengkap berhasil diexport', 'success')
+    } catch (err) {
+      console.error(err)
+      showNotification('Gagal membuat export Excel laporan', 'error')
+    } finally {
+      setExportingReport(false)
+    }
   }
 
   const setChatbotFilter = (field, value) => {
@@ -314,16 +319,16 @@ export default function LaporanPage() {
 
           <div className="topbar-right">
             <button className={autoRefresh ? 'small-action active' : 'small-action'} onClick={() => setAutoRefresh(!autoRefresh)}>
-              <Clock size={16} />
+              <ActionIcon name="refresh" />
               Auto {autoRefresh ? 'ON' : 'OFF'}
             </button>
             <button className="small-action" onClick={fetchData}>
-              <RefreshCw size={16} />
+              <ActionIcon name="refresh" />
               Refresh
             </button>
-            <button className="small-action primary" onClick={exportToCSV}>
-              <Download size={16} />
-              Export CSV
+            <button className="small-action primary" onClick={exportReportExcel} disabled={exportingReport}>
+              <ActionIcon name="export" />
+              {exportingReport ? 'Membuat Excel...' : 'Export Excel'}
             </button>
             <button className="round-btn"><Moon size={17} /></button>
             <button className="round-btn"><Bell size={17} /></button>
@@ -373,12 +378,12 @@ export default function LaporanPage() {
           </select>
 
           <button className={showDateFilter ? 'filter-btn active' : 'filter-btn'} onClick={() => setShowDateFilter(!showDateFilter)}>
-            <Filter size={16} />
+            <ActionIcon name="filter" />
             Filter Tanggal
           </button>
 
           <button className={compareMode ? 'filter-btn active' : 'filter-btn'} onClick={() => setCompareMode(!compareMode)}>
-            <TrendingUp size={16} />
+            <ActionIcon name="generate" />
             Compare
           </button>
         </section>
@@ -626,7 +631,7 @@ export default function LaporanPage() {
                 <p>{selectedChatDetail.nama_siswa} - {selectedChatDetail.kelas || '-'}</p>
               </div>
               <button className="icon-action" onClick={() => setSelectedChatDetail(null)} title="Tutup">
-                <X size={18} />
+                <ActionIcon name="cancel" size={18} />
               </button>
             </div>
 
@@ -654,6 +659,17 @@ export default function LaporanPage() {
       <style>{pageStyle}</style>
     </div>
   )
+}
+
+function getReportDownloadFilename(disposition) {
+  const match = /filename="?([^"]+)"?/i.exec(disposition || '')
+  if (match?.[1]) return match[1]
+
+  const date = new Date()
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `laporan-lengkap-smiasb-${yyyy}${mm}${dd}.xlsx`
 }
 
 function ChatbotStudentReport({
@@ -766,11 +782,11 @@ function ChatbotStudentReport({
         </label>
         <div className="filter-actions">
           <button className="small-action" onClick={refresh} disabled={loading}>
-            <RefreshCw size={16} />
+            <ActionIcon name="refresh" />
             Refresh
           </button>
           <button className="small-action primary" onClick={exportCsv} disabled={loading || items.length === 0}>
-            <Download size={16} />
+            <ActionIcon name="export" />
             Export CSV
           </button>
         </div>
@@ -865,7 +881,7 @@ function ChatbotStudentReport({
                     <td>{formatDateTime(item.created_at)}</td>
                     <td>
                       <button className="icon-action" onClick={() => openDetail(item)} title="Lihat detail">
-                        <Eye size={16} />
+                        <ActionIcon name="detail" />
                       </button>
                     </td>
                   </tr>

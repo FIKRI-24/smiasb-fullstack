@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BookOpenCheck, Eye, RefreshCcw, Search, Trash2 } from 'lucide-react'
+import { BookOpenCheck, Search } from 'lucide-react'
 
 import { bankSoalAPI, sekolahAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 import { useAuth } from '../context/AuthContext'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
 import { confirmToast, toast } from '../utils/notify'
@@ -573,11 +574,11 @@ export default function BankSoalPage() {
 
         <div className="bank-soal-filter-actions">
           <button className="btn btn-primary" onClick={applyFilters}>
-            <Search size={15} />
+            <ActionIcon name="filter" />
             Terapkan Filter
           </button>
           <button className="btn" onClick={resetFilters}>
-            <RefreshCcw size={15} />
+            <ActionIcon name="reset" />
             Reset Filter
           </button>
         </div>
@@ -636,11 +637,11 @@ export default function BankSoalPage() {
                       <td>
                         <div className="bank-soal-actions">
                           <button className="btn btn-sm" onClick={() => openDetail(item)}>
-                            <Eye size={14} />
+                            <ActionIcon name="detail" size={14} />
                             Detail
                           </button>
                           <button className="btn btn-sm btn-danger-soft" onClick={() => handleDelete(item)} disabled={deletingId === item.id}>
-                            <Trash2 size={14} />
+                            <ActionIcon name="delete" size={14} />
                             {deletingId === item.id ? 'Memproses...' : 'Nonaktifkan'}
                           </button>
                         </div>
@@ -655,10 +656,12 @@ export default function BankSoalPage() {
               <span>Halaman {meta.page || page} dari {Math.max(1, meta.total_pages || 1)}</span>
               <div>
                 <button className="btn btn-sm" disabled={page <= 1} onClick={() => setPage(prev => Math.max(1, prev - 1))}>
+                  <ActionIcon name="previous" size={14} />
                   Sebelumnya
                 </button>
                 <button className="btn btn-sm" disabled={page >= (meta.total_pages || 1)} onClick={() => setPage(prev => prev + 1)}>
                   Berikutnya
+                  <ActionIcon name="next" size={14} />
                 </button>
               </div>
             </div>
@@ -674,7 +677,7 @@ export default function BankSoalPage() {
                 <div className="modal-title">Detail Soal Bank Soal</div>
                 <p>Pratinjau lengkap soal yang tersimpan di Bank Soal.</p>
               </div>
-              <button className="btn btn-sm" onClick={closeDetail}>Tutup</button>
+              <button className="btn btn-sm" onClick={closeDetail}><ActionIcon name="cancel" size={14} /> Tutup</button>
             </div>
 
             {detailLoading ? (

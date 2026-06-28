@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { KeyRound, Pencil, Power, Trash2 } from 'lucide-react'
 import { userAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 import { KELAS } from '../constants/classes'
 import { confirmToast, toast } from '../utils/notify'
 
@@ -326,9 +326,9 @@ export default function PenggunaPage() {
             )}
 
             <div className="modal-actions">
-              <button className="btn" onClick={() => closeUserModal()} disabled={saving}>Batal</button>
+              <button className="btn" onClick={() => closeUserModal()} disabled={saving}><ActionIcon name="cancel" /> Batal</button>
               <button className="btn btn-primary" onClick={handleSaveUser} disabled={saving}>
-                {saving ? <><span className="spinner" /> Menyimpan...</> : (isEditMode ? 'Simpan perubahan' : 'Tambah pengguna')}
+                {saving ? <><span className="spinner" /> Menyimpan...</> : <><ActionIcon name={isEditMode ? 'save' : 'add'} /> {isEditMode ? 'Simpan perubahan' : 'Tambah pengguna'}</>}
               </button>
             </div>
           </div>
@@ -359,9 +359,9 @@ export default function PenggunaPage() {
             </div>
 
             <div className="modal-actions">
-              <button className="btn" onClick={closePasswordModal} disabled={passwordSaving}>Batal</button>
+              <button className="btn" onClick={closePasswordModal} disabled={passwordSaving}><ActionIcon name="cancel" /> Batal</button>
               <button className="btn btn-primary" onClick={handleEditPassword} disabled={passwordSaving}>
-                {passwordSaving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan Password'}
+                {passwordSaving ? <><span className="spinner" /> Menyimpan...</> : <><ActionIcon name="save" /> Simpan Password</>}
               </button>
             </div>
           </div>
@@ -378,7 +378,8 @@ export default function PenggunaPage() {
           ))}
         </div>
         <button className="btn btn-primary btn-sm" style={{marginBottom:8}} onClick={openAddModal}>
-          + Tambah pengguna
+          <ActionIcon name="add" />
+          Tambah pengguna
         </button>
       </div>
 
@@ -391,7 +392,7 @@ export default function PenggunaPage() {
             </div>
           </div>
           <button className="btn btn-sm" type="button" onClick={fetchResetRequests} disabled={loadingResetRequests}>
-            {loadingResetRequests ? 'Memuat...' : 'Segarkan'}
+            {loadingResetRequests ? 'Memuat...' : <><ActionIcon name="refresh" /> Segarkan</>}
           </button>
         </div>
 
@@ -435,10 +436,11 @@ export default function PenggunaPage() {
                     onClick={() => openPasswordModalFromRequest(request)}
                     disabled={!request.user_id}
                   >
-                    <KeyRound size={14} style={{ marginRight: 6 }} />
+                    <ActionIcon name="key" size={14} />
                     Edit Password
                   </button>
                   <button className="btn btn-sm" type="button" onClick={() => handleResolveResetRequest(request.id)}>
+                    <ActionIcon name="check" size={14} />
                     Tandai selesai
                   </button>
                 </div>
@@ -454,7 +456,7 @@ export default function PenggunaPage() {
           <span className="search-icon">Cari</span>
           <input className="input" placeholder="Cari nama, email, atau NIS..." value={search} onChange={e => setSearch(e.target.value)} style={{paddingLeft:34,width:240}} onKeyDown={e => e.key==='Enter' && fetch()} />
         </div>
-        <button className="btn" onClick={fetch}>Cari</button>
+        <button className="btn" onClick={fetch}><ActionIcon name="search" /> Cari</button>
       </div>
 
       <div className="card card-0">
@@ -528,11 +530,11 @@ export default function PenggunaPage() {
                     <td>
                       <div style={{display:'flex',gap:5}}>
                         <button className="btn btn-sm" onClick={() => openEditModal(u)} title="Edit pengguna">
-                          <Pencil size={14} style={{marginRight: 6}} />
+                          <ActionIcon name="edit" size={14} />
                           Edit
                         </button>
                         <button className="btn btn-sm" onClick={() => handleToggle(u.id)} title={u.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}>
-                          <Power size={14} style={{marginRight: 6}} />
+                          <ActionIcon name={u.is_aktif ? 'cancel' : 'check'} size={14} />
                           {u.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}
                         </button>
                         <button
@@ -541,11 +543,11 @@ export default function PenggunaPage() {
                           title="Edit password"
                           disabled={!['guru', 'siswa'].includes(u.peran)}
                         >
-                          <KeyRound size={14} style={{marginRight: 6}} />
+                          <ActionIcon name="key" size={14} />
                           Edit Password
                         </button>
                         <button className="btn btn-sm btn-danger" onClick={() => handleDelete(u.id)} title="Hapus">
-                          <Trash2 size={14} style={{marginRight: 6}} />
+                          <ActionIcon name="delete" size={14} />
                           Hapus
                         </button>
                       </div>

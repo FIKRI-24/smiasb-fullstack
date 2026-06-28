@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 export default function GuruPage() {
   const [teachers, setTeachers] = useState([])
@@ -127,7 +128,10 @@ export default function GuruPage() {
                   onChange={event => setSearch(event.target.value)}
                   onKeyDown={event => event.key === 'Enter' && handleSearch()}
                 />
-                <button className="btn" onClick={handleSearch}>Cari</button>
+                <button className="btn" onClick={handleSearch}>
+                  <ActionIcon name="search" />
+                  Cari
+                </button>
               </div>
             </div>
           </div>
@@ -176,8 +180,14 @@ export default function GuruPage() {
                     </td>
                     <td>
                       <div className="school-actions teacher-actions">
-                        <button className="btn btn-sm" onClick={() => openDetail(teacher)}>Detail</button>
-                        <button className="btn btn-sm" onClick={() => openDetail(teacher)}>Lihat Instrumen Guru</button>
+                        <button className="btn btn-sm" onClick={() => openDetail(teacher)}>
+                          <ActionIcon name="detail" size={14} />
+                          Detail
+                        </button>
+                        <button className="btn btn-sm" onClick={() => openDetail(teacher)}>
+                          <ActionIcon name="preview" size={14} />
+                          Lihat Instrumen Guru
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -262,7 +272,10 @@ function TeacherDetailModal({ teacher, loading, error, onClose }) {
         </div>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onClose}>Tutup</button>
+          <button className="btn" onClick={onClose}>
+            <ActionIcon name="cancel" />
+            Tutup
+          </button>
         </div>
       </div>
     </div>

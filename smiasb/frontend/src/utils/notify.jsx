@@ -1,4 +1,5 @@
 import toast from 'react-hot-toast'
+import ActionIcon from '../components/ActionIcon'
 
 export function confirmToast(message, options = {}) {
   const {
@@ -46,9 +47,13 @@ export function confirmToast(message, options = {}) {
               padding: '8px 12px',
               cursor: 'pointer',
               fontWeight: 700,
-              fontSize: 14
+              fontSize: 14,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8
             }}
           >
+            <ActionIcon name="cancel" size={14} />
             {cancelText}
           </button>
           <button
@@ -66,9 +71,13 @@ export function confirmToast(message, options = {}) {
               padding: '8px 12px',
               cursor: 'pointer',
               fontWeight: 800,
-              fontSize: 14
+              fontSize: 14,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8
             }}
           >
+            <ActionIcon name={tone === 'danger' ? 'delete' : 'check'} size={14} />
             {confirmText}
           </button>
         </div>

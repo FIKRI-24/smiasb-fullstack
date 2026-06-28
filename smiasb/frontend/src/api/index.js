@@ -90,6 +90,12 @@ export const instrumenAPI = {
       responseType: 'blob',
     }),
 
+  downloadImportExcelTemplate: () =>
+    api.get('/instrumen/import-excel/template', {
+      responseType: 'blob',
+      timeout: 60000,
+    }),
+
   patchBatasWaktu: (id, data) =>
     api.patch(`/instrumen/${id}/batas-waktu`, data),
 
@@ -136,6 +142,14 @@ export const instrumenAPI = {
   // ============================================================
   saveImportWord: (id, data) =>
     api.post(`/instrumen/${id}/import-word/save`, data, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 60000,
+    }),
+
+  saveImportExcel: (id, data) =>
+    api.post(`/instrumen/${id}/import-excel/save`, data, {
       headers: {
         'Content-Type': 'application/json',
       },
@@ -275,6 +289,13 @@ export const laporanAPI = {
   instrumen: () => api.get('/laporan/instrumen'),
 
   dashboardFull: () => api.get('/laporan/dashboard-full'),
+
+  exportExcel: (params) =>
+    api.get('/laporan/export-excel', {
+      params,
+      responseType: 'blob',
+      timeout: 60000,
+    }),
 
   superAdminDashboard: (params) => api.get('/laporan/super-admin-dashboard', { params }),
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const XLSX = require('xlsx');
 const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const {
@@ -402,6 +403,561 @@ function questionSimilarity(a = '', b = '') {
   return union > 0 ? intersection / union : 0;
 }
 
+function formatExportDateTime(value) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleString('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function buildExportFilename() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+
+  return `laporan-lengkap-smiasb-${yyyy}${mm}${dd}.xlsx`;
+}
+
+function buildWorksheet(rows, fallbackText = 'Belum ada data pada bagian ini.') {
+  const safeRows = rows.length > 0 ? rows : [{ Keterangan: fallbackText }];
+  const worksheet = XLSX.utils.json_to_sheet(safeRows);
+  const headers = Object.keys(safeRows[0] || {});
+
+  worksheet['!cols'] = headers.map(header => {
+    const maxContentLength = safeRows.reduce((max, row) => {
+      const value = row[header] === null || row[header] === undefined ? '' : String(row[header]);
+      return Math.max(max, value.length);
+    }, String(header).length);
+
+    return { wch: Math.min(Math.max(maxContentLength + 2, 12), 60) };
+  });
+
+  return worksheet;
+}
+
+function appendWorksheet(workbook, sheetName, rows, fallbackText) {
+  XLSX.utils.book_append_sheet(
+    workbook,
+    buildWorksheet(rows, fallbackText),
+    sheetName.slice(0, 31)
+  );
+}
+
+function getTipeSoalCategory(value) {
+  if (value === null || value === undefined) return 'Belum ada data';
+  const percent = Number(value);
+  if (percent >= 80) return 'Dikuasai / Mudah';
+  if (percent >= 60) return 'Cukup / Sedang';
+  return 'Sulit / Perlu pembahasan ulang';
+}
+
+async function getDashboardFullData(user, requestedSekolahId) {
+  const stats = await getDashboardStats(user, requestedSekolahId);
+  const distribusiInstrumen = await getDistribusiInstrumen(user, requestedSekolahId);
+  const chatScope = buildChatScope(user, requestedSekolahId);
+
+  if (!stats || !distribusiInstrumen || !chatScope.ok) return null;
+
+  const chatWhere = whereSql(chatScope.where);
+  const chatFrom = `
+    FROM chat_history ch
+    JOIN users u ON u.id = ch.user_id
+    ${chatWhere}
+  `;
+
+  const [totalChat] = await pool.execute(`SELECT COUNT(*) as total ${chatFrom}`, chatScope.params);
+  const [uniqueQuestion] = await pool.execute(`SELECT COUNT(DISTINCT ch.pesan) as total ${chatFrom}`, chatScope.params);
+  const [errorAI] = await pool.execute(
+    `SELECT COUNT(*) as total ${chatFrom} ${chatWhere ? 'AND' : 'WHERE'} ch.balasan LIKE '%kesalahan%'`,
+    chatScope.params
+  );
+  const [topQuestions] = await pool.execute(
+    `SELECT ch.pesan, COUNT(*) as total
+     ${chatFrom}
+     GROUP BY ch.pesan
+     ORDER BY total DESC
+     LIMIT 5`,
+    chatScope.params
+  );
+  const [dailyActivity] = await pool.execute(
+    `SELECT DATE(ch.created_at) as tanggal, COUNT(*) as total
+     ${chatFrom}
+     GROUP BY tanggal
+     ORDER BY tanggal ASC`,
+    chatScope.params
+  );
+
+  const insight = [];
+
+  if (errorAI[0].total > 10) {
+    insight.push('Sistem AI sering error, perlu pengecekan.');
+  }
+
+  if (topQuestions.length > 0 && topQuestions[0].total > 5) {
+    insight.push(`Pertanyaan "${topQuestions[0].pesan}" sering muncul.`);
+  }
+
+  if (totalChat[0].total > 50) {
+    insight.push('Aktivitas chatbot tinggi, siswa aktif belajar.');
+  }
+
+  return {
+    stats,
+    instrumen: {
+      distribusi: distribusiInstrumen
+    },
+    chatbot: {
+      totalChat: totalChat[0].total,
+      uniqueQuestion: uniqueQuestion[0].total,
+      errorAI: errorAI[0].total,
+      topQuestions,
+      dailyActivity
+    },
+    insight
+  };
+}
+
+async function getExportInstrumenRows(user, requestedSekolahId) {
+  const scope = buildInstrumenScope(user, requestedSekolahId);
+  if (!scope.ok) return null;
+
+  const [rows] = await pool.execute(
+    `SELECT
+       i.id,
+       s.nama_sekolah,
+       i.judul,
+       i.jenis,
+       i.mata_pelajaran,
+       i.kelas,
+       guru.nama as nama_guru,
+       i.status,
+       i.jumlah_soal,
+       COUNT(hs.id) as total_pengerjaan,
+       ROUND(AVG(hs.nilai), 1) as rata_rata_nilai,
+       ROUND((SUM(CASE WHEN hs.nilai >= 75 THEN 1 ELSE 0 END) / NULLIF(COUNT(hs.id), 0)) * 100, 1) as ketuntasan,
+       MAX(hs.nilai) as nilai_tertinggi,
+       MIN(hs.nilai) as nilai_terendah
+     FROM instrumen i
+     LEFT JOIN sekolah s ON s.id = i.id_sekolah
+     LEFT JOIN users guru ON guru.id = i.dibuat_oleh
+     LEFT JOIN hasil_siswa hs
+       ON hs.instrumen_id = i.id
+      AND hs.id_sekolah <=> i.id_sekolah
+     ${whereSql(scope.where)}
+     GROUP BY
+       i.id, s.nama_sekolah, i.judul, i.jenis, i.mata_pelajaran,
+       i.kelas, guru.nama, i.status, i.jumlah_soal, i.created_at
+     ORDER BY total_pengerjaan DESC, i.created_at DESC
+     LIMIT 500`,
+    scope.params
+  );
+
+  return rows;
+}
+
+async function getExportHasilSiswaRows(user, requestedSekolahId) {
+  const scope = buildInstrumenScope(user, requestedSekolahId);
+  if (!scope.ok) return null;
+
+  const [rows] = await pool.execute(
+    `SELECT
+       s.nama_sekolah,
+       siswa.nama as nama_siswa,
+       siswa.kelas,
+       i.judul as instrumen,
+       i.mata_pelajaran,
+       i.jenis,
+       guru.nama as nama_guru,
+       hs.nilai,
+       hs.total_benar,
+       hs.total_soal,
+       CASE WHEN hs.nilai >= 75 THEN 'Tuntas' ELSE 'Belum tuntas' END as status_ketuntasan,
+       COALESCE(hs.waktu_selesai, hs.created_at) as waktu_selesai
+     FROM hasil_siswa hs
+     JOIN instrumen i
+       ON i.id = hs.instrumen_id
+      AND i.id_sekolah <=> hs.id_sekolah
+     JOIN users siswa
+       ON siswa.id = hs.siswa_id
+      AND siswa.id_sekolah <=> hs.id_sekolah
+     LEFT JOIN sekolah s ON s.id = hs.id_sekolah
+     LEFT JOIN users guru ON guru.id = i.dibuat_oleh
+     ${whereSql(scope.where)}
+     ORDER BY COALESCE(hs.waktu_selesai, hs.created_at) DESC
+     LIMIT 1000`,
+    scope.params
+  );
+
+  return rows;
+}
+
+async function getExportAnalisisTipeRows(user, requestedSekolahId) {
+  const scope = buildInstrumenScope(user, requestedSekolahId);
+  if (!scope.ok) return null;
+
+  const [rows] = await pool.execute(
+    `SELECT
+       s.nama_sekolah,
+       i.judul as instrumen,
+       i.jenis,
+       i.mata_pelajaran,
+       i.kelas,
+       soal.tipe_soal,
+       COUNT(DISTINCT soal.id) as total_soal,
+       COUNT(js.id) as total_jawaban,
+       ROUND(AVG(CASE
+         WHEN js.id IS NULL THEN NULL
+         WHEN js.is_benar = 1 THEN 100
+         ELSE 0
+       END), 1) as rata_rata_persentase_benar
+     FROM soal soal
+     JOIN instrumen i ON i.id = soal.instrumen_id
+     LEFT JOIN sekolah s ON s.id = i.id_sekolah
+     LEFT JOIN jawaban_siswa js
+       ON js.soal_id = soal.id
+      AND js.instrumen_id = i.id
+      AND js.id_sekolah <=> i.id_sekolah
+     ${whereSql(scope.where)}
+     GROUP BY
+       s.nama_sekolah, i.id, i.judul, i.jenis, i.mata_pelajaran,
+       i.kelas, soal.tipe_soal
+     ORDER BY rata_rata_persentase_benar ASC, total_jawaban DESC
+     LIMIT 500`,
+    scope.params
+  );
+
+  return rows.map(row => ({
+    ...row,
+    kategori: getTipeSoalCategory(row.rata_rata_persentase_benar)
+  }));
+}
+
+async function getExportChatbotRows(user, query = {}, limit = 1000) {
+  const parts = await buildChatbotSiswaQueryParts(user, query);
+  if (!parts.ok) return null;
+
+  const [rows] = await pool.execute(
+    `SELECT
+       ch.id,
+       siswa.id as siswa_id,
+       siswa.nama as nama_siswa,
+       siswa.kelas,
+       ${parts.instrumenIdExpression} as instrumen_id,
+       i.judul as instrumen_judul,
+       i.mata_pelajaran,
+       i.jenis as jenis_instrumen,
+       ch.pesan as pertanyaan,
+       ch.balasan as jawaban_chatbot,
+       ${parts.errorExpression} as is_error,
+       ch.created_at
+     ${parts.fromSql}
+     ${whereSql(parts.where)}
+     ORDER BY ch.created_at DESC, ch.id DESC
+     LIMIT ?`,
+    [...parts.params, limit]
+  );
+
+  return rows.map(row => ({
+    ...row,
+    is_error: Number(row.is_error || 0),
+    status: buildChatbotStatus(row.is_error)
+  }));
+}
+
+function buildTopSiswaChatbotRows(chatbotRows) {
+  const siswaMap = new Map();
+
+  chatbotRows.forEach(row => {
+    const key = row.siswa_id || `${row.nama_siswa}-${row.kelas}`;
+    if (!siswaMap.has(key)) {
+      siswaMap.set(key, {
+        nama_siswa: row.nama_siswa,
+        kelas: row.kelas,
+        jumlah_pertanyaan: 0,
+        jumlah_error: 0,
+        instrumenCount: new Map()
+      });
+    }
+
+    const item = siswaMap.get(key);
+    item.jumlah_pertanyaan += 1;
+    if (row.status === 'error') item.jumlah_error += 1;
+
+    const instrumen = row.instrumen_judul || 'Tanpa instrumen';
+    item.instrumenCount.set(instrumen, (item.instrumenCount.get(instrumen) || 0) + 1);
+  });
+
+  return [...siswaMap.values()]
+    .sort((a, b) => b.jumlah_pertanyaan - a.jumlah_pertanyaan || String(a.nama_siswa).localeCompare(String(b.nama_siswa)))
+    .slice(0, 20)
+    .map(item => {
+      const instrumenTerbanyak = [...item.instrumenCount.entries()]
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+
+      return {
+        'Nama Siswa': item.nama_siswa || '-',
+        Kelas: item.kelas || '-',
+        'Jumlah Pertanyaan': item.jumlah_pertanyaan,
+        'Jumlah Error AI': item.jumlah_error,
+        'Instrumen Paling Sering': instrumenTerbanyak
+      };
+    });
+}
+
+function buildTopPertanyaanChatbotRows(chatbotRows) {
+  const groups = [];
+
+  chatbotRows.forEach(row => {
+    const normalized = normalizeQuestionText(row.pertanyaan);
+    if (!normalized) return;
+
+    let group = groups.find(item => (
+      item.normalized_key === normalized ||
+      questionSimilarity(item.representative_question, row.pertanyaan) >= 0.65
+    ));
+
+    if (!group) {
+      group = {
+        representative_question: row.pertanyaan,
+        normalized_key: normalized,
+        total: 0,
+        siswaMap: new Map()
+      };
+      groups.push(group);
+    }
+
+    group.total += 1;
+    group.siswaMap.set(row.siswa_id || `${row.nama_siswa}-${row.kelas}`, {
+      nama_siswa: row.nama_siswa,
+      kelas: row.kelas
+    });
+
+    if (String(row.pertanyaan || '').length < String(group.representative_question || '').length) {
+      group.representative_question = row.pertanyaan;
+    }
+  });
+
+  return groups
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 20)
+    .map((group, index) => ({
+      No: index + 1,
+      'Pertanyaan Representatif': group.representative_question || '-',
+      'Jumlah Ditanyakan': group.total,
+      'Siswa Terkait': [...group.siswaMap.values()]
+        .map(siswa => `${siswa.nama_siswa || '-'} (${siswa.kelas || '-'})`)
+        .join(', ')
+    }));
+}
+
+function buildExportRecommendationRows(dashboardData, instrumenRows, analisisTipeRows, hasilSiswaRows, chatbotRows) {
+  const recommendations = [...(dashboardData.insight || [])];
+  const chatbot = dashboardData.chatbot || {};
+  const totalInstrumen = Number(dashboardData.stats?.totalInstrumen || 0);
+  const instrumenAktif = Number(dashboardData.stats?.instrumenAktif || 0);
+  const activeRatio = totalInstrumen > 0 ? Math.round((instrumenAktif / totalInstrumen) * 100) : 0;
+
+  if (totalInstrumen > 0 && activeRatio < 50) {
+    recommendations.push('Rasio instrumen aktif masih di bawah 50%, perlu aktivasi atau peninjauan instrumen yang masih draft/nonaktif.');
+  }
+
+  const lowInstrument = [...instrumenRows]
+    .filter(item => Number(item.total_pengerjaan || 0) > 0 && item.rata_rata_nilai !== null && item.rata_rata_nilai !== undefined)
+    .sort((a, b) => Number(a.rata_rata_nilai) - Number(b.rata_rata_nilai))[0];
+
+  if (lowInstrument) {
+    recommendations.push(`Instrumen "${lowInstrument.judul}" memiliki rata-rata nilai terendah (${lowInstrument.rata_rata_nilai}) dan perlu pembahasan ulang.`);
+  }
+
+  const difficultType = [...analisisTipeRows]
+    .filter(item => item.rata_rata_persentase_benar !== null && item.rata_rata_persentase_benar !== undefined)
+    .sort((a, b) => Number(a.rata_rata_persentase_benar) - Number(b.rata_rata_persentase_benar))[0];
+
+  if (difficultType && Number(difficultType.rata_rata_persentase_benar) < 60) {
+    recommendations.push(`Tipe soal ${String(difficultType.tipe_soal || '-').replace(/_/g, ' ')} termasuk sulit karena persentase benar berada di ${difficultType.rata_rata_persentase_benar}%.`);
+  }
+
+  const siswaBelumTuntas = hasilSiswaRows.filter(item => Number(item.nilai || 0) < 75).length;
+  if (siswaBelumTuntas > 0) {
+    recommendations.push(`${siswaBelumTuntas} hasil pengerjaan masih belum tuntas berdasarkan KKM 75.`);
+  }
+
+  const topQuestion = buildTopPertanyaanChatbotRows(chatbotRows)[0];
+  if (topQuestion) {
+    recommendations.push(`Pertanyaan "${topQuestion['Pertanyaan Representatif']}" paling sering muncul dan dapat dijadikan bahan pengayaan atau FAQ.`);
+  }
+
+  if (Number(chatbot.errorAI || 0) > 0) {
+    recommendations.push(`Terdapat ${chatbot.errorAI} respons AI berstatus error, perlu pemantauan kualitas jawaban chatbot.`);
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push('Belum ada rekomendasi khusus. Data pada filter saat ini terlihat stabil.');
+  }
+
+  return recommendations.map((item, index) => ({
+    No: index + 1,
+    Rekomendasi: item
+  }));
+}
+
+function buildLaporanLengkapWorkbook(data) {
+  const workbook = XLSX.utils.book_new();
+  const stats = data.dashboard.stats || {};
+  const chatbot = data.dashboard.chatbot || {};
+  const chatbotRows = data.chatbotRows || [];
+  const totalInstrumen = Number(stats.totalInstrumen || 0);
+  const instrumenAktif = Number(stats.instrumenAktif || 0);
+  const activeRatio = totalInstrumen > 0 ? Math.round((instrumenAktif / totalInstrumen) * 100) : 0;
+  const healthScore = Math.max(0, Math.min(100, 100 - Number(chatbot.errorAI || 0)));
+  const exportedUniqueQuestions = new Set(chatbotRows.map(item => String(item.pertanyaan || '').trim()).filter(Boolean)).size;
+  const exportedAiErrors = chatbotRows.filter(item => item.status === 'error').length;
+
+  appendWorksheet(workbook, 'Ringkasan', [
+    { Bagian: 'Identitas', Indikator: 'Nama Laporan', Nilai: 'Laporan Lengkap Dashboard SMIASB' },
+    { Bagian: 'Identitas', Indikator: 'Tanggal Export', Nilai: formatExportDateTime(new Date()) },
+    { Bagian: 'Identitas', Indikator: 'Dicetak Oleh', Nilai: data.user?.nama || '-' },
+    { Bagian: 'Identitas', Indikator: 'Peran', Nilai: data.user?.peran || '-' },
+    { Bagian: 'Identitas', Indikator: 'Lingkup Sekolah', Nilai: data.query?.id_sekolah || data.user?.id_sekolah || 'Sesuai akses akun' },
+    { Bagian: 'Metrik', Indikator: 'Total Instrumen', Nilai: stats.totalInstrumen || 0 },
+    { Bagian: 'Metrik', Indikator: 'Instrumen Aktif', Nilai: stats.instrumenAktif || 0 },
+    { Bagian: 'Metrik', Indikator: 'Rasio Aktivasi Instrumen', Nilai: `${activeRatio}%` },
+    { Bagian: 'Metrik', Indikator: 'Total Guru', Nilai: stats.totalGuru || 0 },
+    { Bagian: 'Metrik', Indikator: 'Total Siswa', Nilai: stats.totalSiswa || 0 },
+    { Bagian: 'Metrik', Indikator: 'Total Chatbot Dashboard', Nilai: chatbot.totalChat || 0 },
+    { Bagian: 'Metrik', Indikator: 'Pertanyaan Unik Dashboard', Nilai: chatbot.uniqueQuestion || 0 },
+    { Bagian: 'Metrik', Indikator: 'Error AI Dashboard', Nilai: chatbot.errorAI || 0 },
+    { Bagian: 'Metrik', Indikator: 'Tanya Jawab AI Diexport', Nilai: chatbotRows.length },
+    { Bagian: 'Metrik', Indikator: 'Pertanyaan Unik Diexport', Nilai: exportedUniqueQuestions },
+    { Bagian: 'Metrik', Indikator: 'Error AI Diexport', Nilai: exportedAiErrors },
+    { Bagian: 'Metrik', Indikator: 'Health Score', Nilai: `${healthScore}%` },
+    { Bagian: 'Catatan', Indikator: 'KKM', Nilai: 75 },
+    { Bagian: 'Catatan', Indikator: 'Batas Baris', Nilai: 'Rekap hasil dan tanya jawab AI dibatasi maksimal 1000 baris terbaru.' }
+  ]);
+
+  appendWorksheet(workbook, 'Distribusi Instrumen', (data.dashboard.instrumen?.distribusi || []).map(item => ({
+    Jenis: item.jenis || '-',
+    Jumlah: Number(item.jumlah || 0)
+  })));
+
+  appendWorksheet(workbook, 'Aktivitas Chatbot', (chatbot.dailyActivity || []).map(item => ({
+    Tanggal: item.tanggal ? String(item.tanggal).slice(0, 10) : '-',
+    'Total Percakapan': Number(item.total || 0)
+  })));
+
+  appendWorksheet(workbook, 'Top Pertanyaan Dashboard', (chatbot.topQuestions || []).map((item, index) => ({
+    No: index + 1,
+    Pertanyaan: item.pesan || '-',
+    'Jumlah Ditanyakan': Number(item.total || 0)
+  })));
+
+  appendWorksheet(workbook, 'Rekap Instrumen', data.instrumenRows.map(item => ({
+    Sekolah: item.nama_sekolah || '-',
+    'Judul Instrumen': item.judul || '-',
+    Jenis: item.jenis || '-',
+    'Mata Pelajaran': item.mata_pelajaran || '-',
+    Kelas: item.kelas || '-',
+    Guru: item.nama_guru || '-',
+    Status: item.status || '-',
+    'Jumlah Soal': Number(item.jumlah_soal || 0),
+    'Total Pengerjaan': Number(item.total_pengerjaan || 0),
+    'Rata-rata Nilai': item.rata_rata_nilai ?? '-',
+    Ketuntasan: item.ketuntasan === null || item.ketuntasan === undefined ? '-' : `${item.ketuntasan}%`,
+    'Nilai Tertinggi': item.nilai_tertinggi ?? '-',
+    'Nilai Terendah': item.nilai_terendah ?? '-'
+  })));
+
+  appendWorksheet(workbook, 'Hasil Siswa', data.hasilSiswaRows.map(item => ({
+    Sekolah: item.nama_sekolah || '-',
+    Siswa: item.nama_siswa || '-',
+    Kelas: item.kelas || '-',
+    Instrumen: item.instrumen || '-',
+    'Mata Pelajaran': item.mata_pelajaran || '-',
+    Jenis: item.jenis || '-',
+    Guru: item.nama_guru || '-',
+    Nilai: item.nilai ?? '-',
+    'Total Benar': item.total_benar ?? '-',
+    'Total Soal': item.total_soal ?? '-',
+    Status: item.status_ketuntasan || '-',
+    'Waktu Selesai': formatExportDateTime(item.waktu_selesai)
+  })));
+
+  appendWorksheet(workbook, 'Analisis Tipe Soal', data.analisisTipeRows.map(item => ({
+    Sekolah: item.nama_sekolah || '-',
+    Instrumen: item.instrumen || '-',
+    Jenis: item.jenis || '-',
+    'Mata Pelajaran': item.mata_pelajaran || '-',
+    Kelas: item.kelas || '-',
+    'Tipe Soal': String(item.tipe_soal || '-').replace(/_/g, ' '),
+    'Total Soal/Butir': Number(item.total_soal || 0),
+    'Total Jawaban': Number(item.total_jawaban || 0),
+    'Rata-rata Benar': item.rata_rata_persentase_benar === null || item.rata_rata_persentase_benar === undefined ? '-' : `${item.rata_rata_persentase_benar}%`,
+    Kategori: item.kategori || '-'
+  })));
+
+  appendWorksheet(workbook, 'Tanya Jawab AI', data.chatbotRows.map(item => ({
+    Siswa: item.nama_siswa || '-',
+    Kelas: item.kelas || '-',
+    Instrumen: item.instrumen_judul || '-',
+    'Mata Pelajaran': item.mata_pelajaran || '-',
+    'Jenis Instrumen': item.jenis_instrumen || '-',
+    'Pertanyaan Siswa': item.pertanyaan || '-',
+    'Jawaban AI': item.jawaban_chatbot || '-',
+    Status: item.status === 'error' ? 'Error' : 'Berhasil',
+    'Waktu Bertanya': formatExportDateTime(item.created_at)
+  })));
+
+  appendWorksheet(workbook, 'Top Siswa Chatbot', buildTopSiswaChatbotRows(data.chatbotRows));
+  appendWorksheet(workbook, 'Top Pertanyaan Chatbot', buildTopPertanyaanChatbotRows(data.chatbotRows));
+  appendWorksheet(workbook, 'Rekomendasi', data.recommendationRows);
+
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+}
+
+async function getLaporanLengkapExportData(user, query) {
+  const requestedSekolahId = query.id_sekolah;
+  const [dashboard, instrumenRows, hasilSiswaRows, analisisTipeRows, chatbotRows] = await Promise.all([
+    getDashboardFullData(user, requestedSekolahId),
+    getExportInstrumenRows(user, requestedSekolahId),
+    getExportHasilSiswaRows(user, requestedSekolahId),
+    getExportAnalisisTipeRows(user, requestedSekolahId),
+    getExportChatbotRows(user, query)
+  ]);
+
+  if (!dashboard || !instrumenRows || !hasilSiswaRows || !analisisTipeRows || !chatbotRows) {
+    return null;
+  }
+
+  const recommendationRows = buildExportRecommendationRows(
+    dashboard,
+    instrumenRows,
+    analisisTipeRows,
+    hasilSiswaRows,
+    chatbotRows
+  );
+
+  return {
+    user,
+    query,
+    dashboard,
+    instrumenRows,
+    hasilSiswaRows,
+    analisisTipeRows,
+    chatbotRows,
+    recommendationRows
+  };
+}
+
 // GET /api/laporan/super-admin-dashboard - ringkasan global lintas sekolah
 router.get('/super-admin-dashboard', authenticate, async (req, res) => {
   try {
@@ -648,73 +1204,10 @@ router.get('/instrumen', authenticate, authorize('admin', 'guru'), async (req, r
 // GET /api/laporan/dashboard-full
 router.get('/dashboard-full', authenticate, authorize('admin', 'guru'), async (req, res) => {
   try {
-    const requestedSekolahId = req.query.id_sekolah;
-    const stats = await getDashboardStats(req.user, requestedSekolahId);
-    const distribusiInstrumen = await getDistribusiInstrumen(req.user, requestedSekolahId);
-    const chatScope = buildChatScope(req.user, requestedSekolahId);
+    const data = await getDashboardFullData(req.user, req.query.id_sekolah);
+    if (!data) return denyAccess(res);
 
-    if (!stats || !distribusiInstrumen || !chatScope.ok) return denyAccess(res);
-
-    const chatWhere = whereSql(chatScope.where);
-    const chatFrom = `
-      FROM chat_history ch
-      JOIN users u ON u.id = ch.user_id
-      ${chatWhere}
-    `;
-
-    const [totalChat] = await pool.execute(`SELECT COUNT(*) as total ${chatFrom}`, chatScope.params);
-    const [uniqueQuestion] = await pool.execute(`SELECT COUNT(DISTINCT ch.pesan) as total ${chatFrom}`, chatScope.params);
-    const [errorAI] = await pool.execute(
-      `SELECT COUNT(*) as total ${chatFrom} ${chatWhere ? 'AND' : 'WHERE'} ch.balasan LIKE '%kesalahan%'`,
-      chatScope.params
-    );
-    const [topQuestions] = await pool.execute(
-      `SELECT ch.pesan, COUNT(*) as total
-       ${chatFrom}
-       GROUP BY ch.pesan
-       ORDER BY total DESC
-       LIMIT 5`,
-      chatScope.params
-    );
-    const [dailyActivity] = await pool.execute(
-      `SELECT DATE(ch.created_at) as tanggal, COUNT(*) as total
-       ${chatFrom}
-       GROUP BY tanggal
-       ORDER BY tanggal ASC`,
-      chatScope.params
-    );
-
-    const insight = [];
-
-    if (errorAI[0].total > 10) {
-      insight.push('Sistem AI sering error, perlu pengecekan.');
-    }
-
-    if (topQuestions.length > 0 && topQuestions[0].total > 5) {
-      insight.push(`Pertanyaan "${topQuestions[0].pesan}" sering muncul.`);
-    }
-
-    if (totalChat[0].total > 50) {
-      insight.push('Aktivitas chatbot tinggi, siswa aktif belajar.');
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        stats,
-        instrumen: {
-          distribusi: distribusiInstrumen
-        },
-        chatbot: {
-          totalChat: totalChat[0].total,
-          uniqueQuestion: uniqueQuestion[0].total,
-          errorAI: errorAI[0].total,
-          topQuestions,
-          dailyActivity
-        },
-        insight
-      }
-    });
+    return res.json({ success: true, data });
 
   } catch (err) {
     console.error(err);
@@ -722,6 +1215,24 @@ router.get('/dashboard-full', authenticate, authorize('admin', 'guru'), async (r
       success: false,
       message: 'Terjadi kesalahan server.'
     });
+  }
+});
+
+// GET /api/laporan/export-excel - export laporan dashboard lengkap
+router.get('/export-excel', authenticate, authorize('admin', 'guru'), async (req, res) => {
+  try {
+    const data = await getLaporanLengkapExportData(req.user, req.query);
+    if (!data) return denyAccess(res);
+
+    const buffer = buildLaporanLengkapWorkbook(data);
+    const filename = buildExportFilename();
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Gagal membuat export Excel laporan.' });
   }
 });
 

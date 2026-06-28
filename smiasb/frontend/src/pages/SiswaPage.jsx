@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 export default function SiswaPage() {
   const [students, setStudents] = useState([])
@@ -210,7 +211,10 @@ export default function SiswaPage() {
                   onChange={event => setSearch(event.target.value)}
                   onKeyDown={event => event.key === 'Enter' && handleSearch()}
                 />
-                <button className="btn" onClick={handleSearch}>Cari</button>
+                <button className="btn" onClick={handleSearch}>
+                  <ActionIcon name="search" />
+                  Cari
+                </button>
               </div>
             </div>
           </div>
@@ -259,8 +263,14 @@ export default function SiswaPage() {
                     <td>{formatScore(student.rata_rata_nilai)}</td>
                     <td>
                       <div className="school-actions student-actions">
-                        <button className="btn btn-sm" onClick={() => openDetail(student)}>Detail</button>
-                        <button className="btn btn-sm" onClick={() => openDetail(student)}>Lihat Riwayat</button>
+                        <button className="btn btn-sm" onClick={() => openDetail(student)}>
+                          <ActionIcon name="detail" size={14} />
+                          Detail
+                        </button>
+                        <button className="btn btn-sm" onClick={() => openDetail(student)}>
+                          <ActionIcon name="preview" size={14} />
+                          Lihat Riwayat
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -346,7 +356,10 @@ function StudentDetailModal({ student, loading, error, onClose }) {
         </div>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onClose}>Tutup</button>
+          <button className="btn" onClick={onClose}>
+            <ActionIcon name="cancel" />
+            Tutup
+          </button>
         </div>
       </div>
     </div>

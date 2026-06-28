@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { authAPI, userAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { confirmToast } from '../utils/notify'
+import ActionIcon from '../components/ActionIcon'
 
 export default function ProfilPage() {
   const { user, login } = useAuth()
@@ -189,6 +190,7 @@ export default function ProfilPage() {
             <div className="profile-photo-name">{user?.nama}</div>
             <div className="profile-photo-actions">
               <label className="btn btn-primary" style={{ cursor: uploadingFoto ? 'not-allowed' : 'pointer' }}>
+                <ActionIcon name="upload" />
                 Ganti Foto
                 <input
                   type="file"
@@ -204,6 +206,7 @@ export default function ProfilPage() {
 
               {fotoUrl && (
                 <button className="btn btn-danger" type="button" onClick={handleHapusFoto} disabled={uploadingFoto}>
+                  <ActionIcon name="delete" />
                   Hapus Foto
                 </button>
               )}
@@ -227,7 +230,7 @@ export default function ProfilPage() {
             </button>
 
             <label className="profile-upload-button" title="Upload foto" style={{ cursor: uploadingFoto ? 'not-allowed' : 'pointer', opacity: uploadingFoto ? 0.6 : 1 }}>
-              {uploadingFoto ? '...' : '+'}
+              {uploadingFoto ? '...' : <ActionIcon name="upload" size={14} />}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -253,6 +256,7 @@ export default function ProfilPage() {
 
         {fotoUrl && (
           <button className="btn btn-danger btn-sm profile-remove-photo" type="button" onClick={handleHapusFoto} disabled={uploadingFoto}>
+            <ActionIcon name="delete" size={14} />
             Hapus Foto
           </button>
         )}
@@ -317,7 +321,17 @@ export default function ProfilPage() {
             )}
 
             <button className="btn btn-primary" type="submit" disabled={saving}>
-              {saving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan perubahan'}
+              {saving ? (
+                <>
+                  <span className="spinner" />
+                  Menyimpan...
+                </>
+              ) : (
+                <>
+                  <ActionIcon name="save" />
+                  Simpan perubahan
+                </>
+              )}
             </button>
           </form>
         </div>
@@ -346,7 +360,17 @@ export default function ProfilPage() {
               <input className="input" type="password" placeholder="Ulangi password baru" value={passForm.konfirmasi} onChange={e => setP('konfirmasi', e.target.value)} />
             </div>
             <button className="btn btn-primary" type="submit" disabled={savingPass}>
-              {savingPass ? <><span className="spinner" /> Mengubah...</> : 'Ubah password'}
+              {savingPass ? (
+                <>
+                  <span className="spinner" />
+                  Mengubah...
+                </>
+              ) : (
+                <>
+                  <ActionIcon name="key" />
+                  Ubah password
+                </>
+              )}
             </button>
           </form>
         </div>

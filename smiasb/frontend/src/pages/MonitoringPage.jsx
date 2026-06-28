@@ -5,16 +5,19 @@ import {
   ArrowLeft,
   BarChart3,
   CheckCircle2,
+  ClipboardList,
   Download,
   Eye,
   FileText,
   Medal,
+  Target,
   TrendingDown,
   UserX,
   Users,
   X
 } from "lucide-react";
 import api from "../api";
+import ActionIcon from "../components/ActionIcon";
 import { sanitizeRichHtml, stripHtml } from "../utils/sanitizeHtml";
 import { toast } from "../utils/notify";
 
@@ -22,11 +25,11 @@ const API_ASSET_URL = (import.meta.env.VITE_API_URL || "http://localhost:5000/ap
 const PASSING_SCORE = 75;
 
 const TAB_ITEMS = [
-  { key: "sudah", label: "Sudah Mengerjakan" },
-  { key: "belum", label: "Belum Mengerjakan" },
-  { key: "butir", label: "Analisis Butir" },
-  { key: "tipe", label: "Analisis Tipe" },
-  { key: "rekomendasi", label: "Rekomendasi" }
+  { key: "sudah", label: "Sudah Mengerjakan", icon: CheckCircle2 },
+  { key: "belum", label: "Belum Mengerjakan", icon: UserX },
+  { key: "butir", label: "Analisis Butir", icon: ClipboardList },
+  { key: "tipe", label: "Analisis Tipe", icon: BarChart3 },
+  { key: "rekomendasi", label: "Rekomendasi", icon: AlertTriangle }
 ];
 
 const statusBadgeClass = (percent) => (
@@ -44,6 +47,11 @@ const tipeLabel = (tipe = "") => String(tipe || "-").replace(/_/g, " ");
 const formatNumber = (value) => {
   const number = Number(value || 0);
   return Number.isInteger(number) ? String(number) : number.toFixed(2);
+};
+
+const getInitials = (name = "") => {
+  const words = String(name || "-").trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "-";
 };
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
@@ -196,6 +204,26 @@ const MonitoringMetricCard = ({ label, value, note, icon: Icon, tone = "blue" })
   </div>
 );
 
+const MonitoringProgressCard = ({ label, value, caption, tone = "blue" }) => (
+  <div className={`monitoring-detail-progress-card tone-${tone}`}>
+    <div
+      className="monitoring-progress-ring"
+      style={{ "--progress": `${clampPercent(value)}%` }}
+      aria-hidden="true"
+    >
+      <span>{value}%</span>
+    </div>
+    <div className="monitoring-progress-copy">
+      <span>{label}</span>
+      <strong>{value}%</strong>
+      <div className="monitoring-progress">
+        <span style={{ width: `${clampPercent(value)}%` }} />
+      </div>
+      <small>{caption}</small>
+    </div>
+  </div>
+);
+
 const MonitoringPanel = ({ title, subtitle, badge, action, children, className = "" }) => (
   <section className={`monitoring-detail-panel ${className}`}>
     <div className="monitoring-detail-panel-head">
@@ -210,6 +238,17 @@ const MonitoringPanel = ({ title, subtitle, badge, action, children, className =
     </div>
     {children}
   </section>
+);
+
+const MonitoringEmptyState = ({ icon: Icon, title, description, action }) => (
+  <div className="monitoring-empty-state">
+    <div className="monitoring-empty-icon">
+      <Icon size={24} />
+    </div>
+    <h4>{title}</h4>
+    <p>{description}</p>
+    {action}
+  </div>
 );
 
 const StatusCell = ({ correct }) => (
@@ -431,6 +470,16 @@ export default function MonitoringPage() {
   const masteryPercent = totalSudahMengerjakan > 0
     ? Math.round((totalTuntas / totalSudahMengerjakan) * 100)
     : 0;
+  const progressStatusText = completionPercent >= 100
+    ? "Semua siswa telah mengerjakan"
+    : completionPercent > 0
+      ? "Pengerjaan sedang berlangsung"
+      : "Belum ada pengerjaan masuk";
+  const masteryStatusText = totalSudahMengerjakan === 0
+    ? "Ketuntasan akan muncul setelah siswa mengerjakan"
+    : masteryPercent >= 80
+      ? "Mayoritas siswa sudah tuntas"
+      : "Perlu tindak lanjut pembelajaran";
 
   const rekomendasiGabungan = useMemo(() => {
     const belum = belumMengerjakan.daftar_siswa || [];
@@ -479,7 +528,7 @@ export default function MonitoringPage() {
       <section className="monitoring-detail-hero">
         <div className="monitoring-detail-hero-main">
           <button className="monitoring-detail-back" onClick={() => navigate(-1)}>
-            <ArrowLeft size={16} />
+            <ActionIcon name="back" />
             Kembali
           </button>
           <div>
@@ -487,24 +536,36 @@ export default function MonitoringPage() {
             <h1>Monitoring Hasil Siswa</h1>
             <p>{instrumen?.judul || "-"} - {instrumen?.mata_pelajaran || "-"} - Kelas {instrumen?.kelas || "-"}</p>
           </div>
+          <div className="monitoring-hero-meta">
+            <span><FileText size={14} /> {instrumen?.jenis || "Instrumen"}</span>
+            <span><Target size={14} /> KKM {PASSING_SCORE}</span>
+            <span><Users size={14} /> {totalSiswa} peserta</span>
+            <span><CheckCircle2 size={14} /> {progressStatusText}</span>
+          </div>
+          <div className="monitoring-hero-actions">
+            <button type="button" onClick={() => setActiveTab("belum")}>
+              <ActionIcon name="detail" />
+              Tindak lanjuti siswa
+            </button>
+            <button type="button" onClick={() => setActiveTab("rekomendasi")}>
+              <ActionIcon name="generate" />
+              Buka rekomendasi
+            </button>
+          </div>
         </div>
         <div className="monitoring-detail-hero-side">
-          <div className="monitoring-detail-progress-card">
-            <span>Progres pengerjaan</span>
-            <strong>{completionPercent}%</strong>
-            <div className="monitoring-progress">
-              <span style={{ width: `${clampPercent(completionPercent)}%` }} />
-            </div>
-            <small>{totalSudahMengerjakan} dari {totalSiswa} siswa sudah mengerjakan</small>
-          </div>
-          <div className="monitoring-detail-progress-card">
-            <span>Ketuntasan</span>
-            <strong>{masteryPercent}%</strong>
-            <div className="monitoring-progress success">
-              <span style={{ width: `${clampPercent(masteryPercent)}%` }} />
-            </div>
-            <small>{totalTuntas} siswa mencapai nilai minimal {PASSING_SCORE}</small>
-          </div>
+          <MonitoringProgressCard
+            label="Progres pengerjaan"
+            value={completionPercent}
+            caption={`${totalSudahMengerjakan} dari ${totalSiswa} siswa sudah mengerjakan`}
+            tone="blue"
+          />
+          <MonitoringProgressCard
+            label="Ketuntasan"
+            value={masteryPercent}
+            caption={`${totalTuntas} siswa tuntas. ${masteryStatusText}`}
+            tone="teal"
+          />
         </div>
       </section>
 
@@ -521,6 +582,7 @@ export default function MonitoringPage() {
 
       <nav className="monitoring-detail-tabs" aria-label="Tab monitoring detail">
         {TAB_ITEMS.map((item) => {
+          const Icon = item.icon;
           const count = item.key === "sudah"
             ? totalSudahMengerjakan
             : item.key === "belum"
@@ -534,6 +596,7 @@ export default function MonitoringPage() {
               className={activeTab === item.key ? "active" : ""}
               onClick={() => setActiveTab(item.key)}
             >
+              <Icon size={15} />
               {item.label}
               {count !== null && <span>{count}</span>}
             </button>
@@ -549,9 +612,19 @@ export default function MonitoringPage() {
         >
 
           {hasilSiswa.length === 0 ? (
-            <div className="empty">
-              <div className="empty-text">Belum ada siswa yang mengerjakan soal ini.</div>
-            </div>
+            <MonitoringEmptyState
+              icon={Users}
+              title="Belum ada hasil siswa"
+              description="Nilai, durasi, dan detail jawaban akan muncul setelah siswa mengirim pengerjaan."
+              action={
+                totalBelumMengerjakan > 0 && (
+                  <button type="button" className="monitoring-empty-action" onClick={() => setActiveTab("belum")}>
+                    <ActionIcon name="detail" />
+                    Lihat siswa belum mengerjakan
+                  </button>
+                )
+              }
+            />
           ) : (
             <div className="monitoring-table-wrap">
               <table className="table">
@@ -575,11 +648,15 @@ export default function MonitoringPage() {
                       <tr key={siswa.siswa_id}>
                         <td>{idx + 1}</td>
                         <td>
-                          <strong>{siswa.siswa_nama}</strong>
-                          <br />
-                          <small className="monitoring-muted">
-                            NIS: {siswa.nis || "-"}
-                          </small>
+                          <div className="monitoring-student-cell">
+                            <span className="monitoring-student-avatar">{getInitials(siswa.siswa_nama)}</span>
+                            <div>
+                              <strong>{siswa.siswa_nama}</strong>
+                              <small className="monitoring-muted">
+                                NIS: {siswa.nis || "-"}
+                              </small>
+                            </div>
+                          </div>
                         </td>
                         <td>
                           <span className={`badge ${nilai >= PASSING_SCORE ? "badge-teal" : "badge-red"}`}>
@@ -600,8 +677,8 @@ export default function MonitoringPage() {
                             className="btn btn-primary btn-sm monitoring-detail-action"
                             onClick={() => lihatDetailSiswa(siswa)}
                           >
-                            <Eye size={13} />
-                            Detail
+                            <ActionIcon name="detail" size={14} />
+                            Lihat detail
                           </button>
                         </td>
                       </tr>
@@ -623,7 +700,7 @@ export default function MonitoringPage() {
               <span className="badge badge-gray">{totalBelumMengerjakan} siswa</span>
               {totalBelumMengerjakan > 0 && (
                 <button className="btn btn-sm monitoring-detail-action" onClick={exportBelumMengerjakan}>
-                  <Download size={13} />
+                  <ActionIcon name="export" size={14} />
                   Export CSV
                 </button>
               )}
@@ -636,9 +713,19 @@ export default function MonitoringPage() {
               <div className="spinner spinner-dark" />
             </div>
           ) : totalBelumMengerjakan === 0 ? (
-            <div className="empty">
-              <div className="empty-text">Semua siswa sudah mengerjakan instrumen ini.</div>
-            </div>
+            <MonitoringEmptyState
+              icon={CheckCircle2}
+              title="Semua siswa sudah mengerjakan"
+              description="Tidak ada siswa yang perlu difollow up pada instrumen ini."
+              action={
+                totalSudahMengerjakan > 0 && (
+                  <button type="button" className="monitoring-empty-action" onClick={() => setActiveTab("sudah")}>
+                    <ActionIcon name="detail" />
+                    Lihat hasil siswa
+                  </button>
+                )
+              }
+            />
           ) : (
             <>
               {Object.keys(belumMengerjakan.per_rombel || {}).length > 0 && (
@@ -673,7 +760,15 @@ export default function MonitoringPage() {
                     {(belumMengerjakan.daftar_siswa || []).map((siswa, idx) => (
                       <tr key={siswa.siswa_id || idx}>
                         <td>{idx + 1}</td>
-                        <td><strong>{siswa.nama}</strong></td>
+                        <td>
+                          <div className="monitoring-student-cell">
+                            <span className="monitoring-student-avatar warning">{getInitials(siswa.nama)}</span>
+                            <div>
+                              <strong>{siswa.nama}</strong>
+                              <small className="monitoring-muted">Perlu pengingat pengerjaan</small>
+                            </div>
+                          </div>
+                        </td>
                         <td>{siswa.nisn || "-"}</td>
                         <td>{siswa.kelas || instrumen?.kelas || "-"}</td>
                         <td><span className="badge badge-red">Belum mengerjakan</span></td>
@@ -761,11 +856,17 @@ export default function MonitoringPage() {
             badge={<AlertTriangle size={18} className="monitoring-panel-icon" />}
           >
             <div className="monitoring-recommendation-list">
-              {(rekomendasiGabungan.rekomendasi_remedial || []).map((item, idx) => (
-                <div key={idx} className="monitoring-recommendation-item">
-                  {item}
+              {(rekomendasiGabungan.rekomendasi_remedial || []).length === 0 ? (
+                <div className="monitoring-recommendation-item muted">
+                  Rekomendasi akan muncul setelah ada hasil pengerjaan siswa.
                 </div>
-              ))}
+              ) : (
+                (rekomendasiGabungan.rekomendasi_remedial || []).map((item, idx) => (
+                  <div key={idx} className="monitoring-recommendation-item">
+                    {item}
+                  </div>
+                ))
+              )}
             </div>
           </MonitoringPanel>
 
@@ -854,7 +955,7 @@ export default function MonitoringPage() {
                 <h3>{selectedSiswa.siswa_nama}</h3>
               </div>
               <button className="monitoring-modal-close" onClick={() => setShowModal(false)} aria-label="Tutup detail jawaban">
-                <X size={18} />
+                <ActionIcon name="cancel" size={18} />
               </button>
             </div>
 
@@ -928,6 +1029,7 @@ export default function MonitoringPage() {
 
             <div className="monitoring-modal-footer">
               <button className="btn" onClick={() => setShowModal(false)}>
+                <ActionIcon name="cancel" />
                 Tutup
               </button>
             </div>

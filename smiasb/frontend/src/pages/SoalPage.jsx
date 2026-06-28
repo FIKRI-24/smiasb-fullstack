@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 import api, { bankSoalAPI } from "../api";
 import toast from 'react-hot-toast'
 import { sanitizeRichHtml, stripHtml } from "../utils/sanitizeHtml";
+import ActionIcon from "../components/ActionIcon";
 
 const emptyBankSoalFilters = {
   search: "",
@@ -33,6 +34,16 @@ const layoutBlockLabelMap = layoutBlockDefinitions.reduce((acc, block) => {
   acc[block.type] = block.label;
   return acc;
 }, {});
+const sebabAkibatManualTemplate = `Pernyataan ...
+
+SEBAB:
+Alasan ...`;
+const sebabAkibatQuestionPlaceholder = `Isi seperti format hasil import Word:
+
+Pernyataan ...
+
+SEBAB:
+Alasan ...`;
 
 const SoalPage = () => {
   const { instrumenId } = useParams();
@@ -260,6 +271,14 @@ const SoalPage = () => {
       }
       return next;
     });
+  };
+
+  const applySebabAkibatTemplate = () => {
+    setForm(prev => (
+      String(prev.pertanyaan || '').trim()
+        ? prev
+        : { ...prev, pertanyaan: sebabAkibatManualTemplate }
+    ));
   };
 
   const escapeHtml = (value = '') => (
@@ -698,8 +717,6 @@ const SoalPage = () => {
         ? existingData.filter(table => !isLayoutMetadataTable(table))
         : [];
 
-    const blocks = normalizeManualLayoutBlocks(form.layout_blocks);
-
     const stimulusText = parsePlainTextValue(form.stimulus_tambahan);
     const stimulus = buildStyledHtml(stimulusText, {
       bold: form.stimulusBold,
@@ -707,6 +724,10 @@ const SoalPage = () => {
       align: form.stimulusAlign
     });
     const hasStimulus = stimulusText.trim() !== '';
+    const normalizedBlocks = normalizeManualLayoutBlocks(form.layout_blocks);
+    const blocks = hasStimulus && !normalizedBlocks.some(block => block.type === 'stimulus')
+      ? [...normalizedBlocks, { type: 'stimulus', id: 'stimulus' }]
+      : normalizedBlocks;
     const hasImage = blocks.some(block => block.type === 'image') && Boolean(previewGambar) && !removeGambarSoal;
     const shouldIncludeLayout = hasStimulus || hasImage || !isDefaultLayoutOrder(blocks) || supportingTables.length > 0;
     const imageCaptionText = parsePlainTextValue(form.gambar_caption || '');
@@ -1152,6 +1173,9 @@ Yakin ingin mengaktifkan instrumen ini?`,
     background: bg, color, borderRadius: 20,
     fontSize: 11, fontWeight: 600, padding: '3px 10px',
   })
+  const isSebabAkibatManual = form.tipe_soal === 'sebab_akibat';
+  const hasStimulusLayoutBlock = normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === 'stimulus');
+  const shouldShowStimulusEditor = isSebabAkibatManual || hasStimulusLayoutBlock;
   const previewBankText = (value = '', max = 110) => {
     const text = stripHtml(String(value || '')).replace(/\s+/g, ' ').trim();
     if (!text) return '-';
@@ -1191,7 +1215,10 @@ Yakin ingin mengaktifkan instrumen ini?`,
             onClick={() => navigate(-1)}
             style={{ borderRadius: 10, border: '0.5px solid rgba(0,0,0,0.1)', marginTop: 2, flexShrink: 0 }}
             title="Kembali"
-          >Kembali</button>
+          >
+            <ActionIcon name="back" size={14} />
+            Kembali
+          </button>
 
           {/* Judul + meta */}
           <div style={{ flex: 1, minWidth: 200 }}>
@@ -1262,7 +1289,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
             >
               {publishing
                 ? <><div className="spinner" style={{ width: 14, height: 14 }} /> Mengaktifkan...</>
-                : 'Aktifkan Instrumen'}
+                : <><ActionIcon name="check" /> Aktifkan Instrumen</>}
             </button>
           </div>
         )}
@@ -1288,12 +1315,15 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   onClick={openBankSoalModal}
                   style={{ borderRadius: 8, fontSize: 12, color: '#185FA5', background: '#EBF3FC', border: 'none' }}
                 >
+                  <ActionIcon name="use" size={14} />
                   Ambil dari Bank Soal
                 </button>
               )}
               {editingSoal && (
                 <button className="btn btn-sm" onClick={handleCancelEdit}
-                  style={{ color: 'var(--gray-600)', fontSize: 12 }}>Batal edit
+                  style={{ color: 'var(--gray-600)', fontSize: 12 }}>
+                  <ActionIcon name="cancel" size={14} />
+                  Batal edit
                 </button>
               )}
             </div>
@@ -1303,7 +1333,39 @@ Yakin ingin mengaktifkan instrumen ini?`,
 
             {/* Pertanyaan */}
             <div className="form-group">
-              <label className="form-label">Pertanyaan <span style={{ color: '#A32D2D' }}>*</span></label>
+              <label className="form-label">
+                {isSebabAkibatManual ? 'Pertanyaan / Pernyataan Soal Sebab-Akibat' : 'Pertanyaan'} <span style={{ color: '#A32D2D' }}>*</span>
+              </label>
+              {isSebabAkibatManual && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                    padding: '10px 12px',
+                    marginBottom: 10,
+                    borderRadius: 10,
+                    border: '1px solid #FDE68A',
+                    background: '#FFFBEB',
+                    color: '#92400E',
+                    fontSize: 12
+                  }}
+                >
+                  <span>Format manual disamakan dengan import Word: pernyataan, baris SEBAB:, lalu alasan.</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={applySebabAkibatTemplate}
+                    disabled={Boolean(String(form.pertanyaan || '').trim())}
+                    style={{ borderRadius: 8, fontSize: 12, background: '#FDE68A', color: '#92400E' }}
+                  >
+                    <ActionIcon name="generate" size={14} />
+                    Gunakan template
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 10 }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Tebal</label>
@@ -1334,9 +1396,9 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 </div>
               </div>
               <textarea
-                name="pertanyaan" className="textarea" rows={4}
+                name="pertanyaan" className="textarea" rows={isSebabAkibatManual ? 6 : 4}
                 value={form.pertanyaan} onChange={handleChange} required
-                placeholder="Tulis pertanyaan soal di sini..."
+                placeholder={isSebabAkibatManual ? sebabAkibatQuestionPlaceholder : "Tulis pertanyaan soal di sini..."}
               />
             </div>
 
@@ -1417,7 +1479,10 @@ Yakin ingin mengaktifkan instrumen ini?`,
             <div className="form-group">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                 <label className="form-label">Tabel Pendukung</label>
-                <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={addSupportTable}>+ Tambah Tabel</button>
+                <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={addSupportTable}>
+                  <ActionIcon name="add" size={14} />
+                  Tambah Tabel
+                </button>
               </div>
               {(form.supporting_tables || []).length === 0 && (
                 <div style={{ padding: 14, border: '1px solid rgba(148,163,184,0.4)', borderRadius: 10, background: '#F8FAFC', color: 'var(--gray-600)', fontSize: 13 }}>
@@ -1428,7 +1493,10 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 <div key={tableIndex} style={{ border: '1px solid rgba(148,163,184,0.3)', borderRadius: 12, padding: 14, marginBottom: 14, background: '#fff' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                     <div style={{ fontWeight: 600 }}>Tabel {tableIndex + 1}</div>
-                    <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => removeSupportTable(tableIndex)}>Hapus Tabel</button>
+                    <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => removeSupportTable(tableIndex)}>
+                      <ActionIcon name="delete" size={14} />
+                      Hapus Tabel
+                    </button>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 12 }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
@@ -1501,8 +1569,14 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   </div>
 
                   <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => addTableRow(tableIndex)}>+ Baris</button>
-                    <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => addTableColumn(tableIndex)}>+ Kolom</button>
+                    <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => addTableRow(tableIndex)}>
+                      <ActionIcon name="add" size={14} />
+                      Baris
+                    </button>
+                    <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => addTableColumn(tableIndex)}>
+                      <ActionIcon name="add" size={14} />
+                      Kolom
+                    </button>
                   </div>
 
                   <div style={{ overflowX: 'auto', marginTop: 12 }}>
@@ -1524,6 +1598,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                             ))}
                             <td style={{ border: '1px solid rgba(148,163,184,0.4)', padding: 8, background: '#F8FAFC' }}>
                               <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => removeTableRow(tableIndex, rowIndex)}>
+                                <ActionIcon name="delete" size={14} />
                                 Hapus baris
                               </button>
                             </td>
@@ -1533,6 +1608,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                           {table.rows[0].map((_, cellIndex) => (
                             <td key={cellIndex} style={{ border: '1px solid transparent', padding: 4 }}>
                               <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => removeTableColumn(tableIndex, cellIndex)}>
+                                <ActionIcon name="delete" size={14} />
                                 Hapus kolom
                               </button>
                             </td>
@@ -1548,7 +1624,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
             )}
 
             {/* Stimulus Tambahan */}
-            {normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === 'stimulus') && (
+            {shouldShowStimulusEditor && (
             <div className="form-group">
               <label className="form-label">
                 Stimulus Tambahan <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}>(opsional)</span>
@@ -1583,11 +1659,13 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 </div>
               </div>
               <textarea name="stimulus_tambahan" className="textarea" rows={4}
-                placeholder="Tambahkan teks stimulus atau bacaan pendukung untuk soal ini"
+                placeholder={isSebabAkibatManual ? "Tambahkan stimulus setelah pertanyaan sebab-akibat jika diperlukan" : "Tambahkan teks stimulus atau bacaan pendukung untuk soal ini"}
                 value={form.stimulus_tambahan} onChange={handleChange}
               />
               <p style={{ marginTop: 6, fontSize: 12, color: 'var(--gray-500)' }}>
-                Stimulus tambahan disimpan dalam metadata layout yang sama dengan Preview Word.
+                {isSebabAkibatManual
+                  ? 'Jika diisi, stimulus akan tampil setelah pertanyaan sebab-akibat dan sebelum jawaban objektif A-D.'
+                  : 'Stimulus tambahan disimpan dalam metadata layout yang sama dengan Preview Word.'}
               </p>
             </div>
             )}
@@ -1652,6 +1730,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         title="Hapus blok"
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                       >
+                        <ActionIcon name="delete" size={14} />
                         Hapus
                       </button>
                     )}
@@ -1659,12 +1738,14 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 ))}
                 {layoutBlockDefinitions.some(definition => (
                   definition.type !== 'question' &&
+                  !(isSebabAkibatManual && definition.type === 'stimulus') &&
                   !normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === definition.type)
                 )) && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {layoutBlockDefinitions
                       .filter(definition => (
                         definition.type !== 'question' &&
+                        !(isSebabAkibatManual && definition.type === 'stimulus') &&
                         !normalizeManualLayoutBlocks(form.layout_blocks).some(block => block.type === definition.type)
                       ))
                       .map(definition => (
@@ -1675,13 +1756,16 @@ Yakin ingin mengaktifkan instrumen ini?`,
                           onClick={() => addManualLayoutBlock(definition.type)}
                           style={{ borderRadius: 8, fontSize: 12 }}
                         >
-                          + Tambah {definition.label}
+                          <ActionIcon name="add" size={14} />
+                          Tambah {definition.label}
                         </button>
                       ))}
                   </div>
                 )}
                 <p style={{ margin: 0, fontSize: 12, color: '#475569' }}>
-                  Atur blok yang dipakai pada soal ini. Jawaban tetap tampil paling bawah.
+                  {isSebabAkibatManual
+                    ? 'Untuk Sebab Akibat, stimulus tambahan otomatis berada setelah pertanyaan jika diisi. Jawaban tetap tampil paling bawah.'
+                    : 'Atur blok yang dipakai pada soal ini. Jawaban tetap tampil paling bawah.'}
                 </p>
               </div>
             </div>
@@ -1766,13 +1850,19 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         Benar
                       </label>
                       <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, padding: '4px 10px' }}
-                        onClick={() => removePernyataanChecklist(idx)}>Hapus</button>
+                        onClick={() => removePernyataanChecklist(idx)}>
+                        <ActionIcon name="delete" size={14} />
+                        Hapus
+                      </button>
                     </div>
                   ))}
                 </div>
                 <button type="button" className="btn btn-sm"
                   style={{ borderRadius: 8, fontSize: 12 }}
-                  onClick={addPernyataanChecklist}>+ Tambah Pernyataan</button>
+                  onClick={addPernyataanChecklist}>
+                  <ActionIcon name="add" size={14} />
+                  Tambah Pernyataan
+                </button>
               </div>
             )}
 
@@ -1810,12 +1900,18 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         ))}
                       </select>
                       <button type="button" className="btn btn-danger btn-sm" style={{ borderRadius: 8, padding: '4px 10px', whiteSpace: 'nowrap' }}
-                        onClick={() => removePasanganJodoh(idx)}>Hapus</button>
+                        onClick={() => removePasanganJodoh(idx)}>
+                        <ActionIcon name="delete" size={14} />
+                        Hapus
+                      </button>
                     </div>
                   ))}
                 </div>
                 <button type="button" className="btn btn-sm" style={{ borderRadius: 8, fontSize: 12 }}
-                  onClick={addPasanganJodoh}>+ Tambah Pasangan</button>
+                  onClick={addPasanganJodoh}>
+                  <ActionIcon name="add" size={14} />
+                  Tambah Pasangan
+                </button>
               </div>
             )}
 
@@ -1897,11 +1993,15 @@ Yakin ingin mengaktifkan instrumen ini?`,
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '0.5px solid rgba(0,0,0,0.07)' }}>
               {editingSoal && (
                 <button type="button" className="btn" onClick={handleCancelEdit}
-                  style={{ borderRadius: 10, fontSize: 13 }}>Batal</button>
+                  style={{ borderRadius: 10, fontSize: 13 }}>
+                  <ActionIcon name="cancel" />
+                  Batal
+                </button>
               )}
               <button type="submit" className="btn btn-primary"
                 style={{ borderRadius: 10, fontSize: 13, padding: '9px 20px' }}>
-                {editingSoal ? 'Update Soal' : '+ Tambah Soal'}
+                <ActionIcon name={editingSoal ? 'save' : 'add'} />
+                {editingSoal ? 'Update Soal' : 'Tambah Soal'}
               </button>
             </div>
           </form>
@@ -1981,10 +2081,16 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button className="btn btn-sm"
                             style={{ borderRadius: 8, fontSize: 12, color: '#185FA5', background: '#EBF3FC', border: 'none' }}
-                            onClick={() => handleEdit(item)}>Edit</button>
+                            onClick={() => handleEdit(item)}>
+                            <ActionIcon name="edit" size={14} />
+                            Edit
+                          </button>
                           <button className="btn btn-sm btn-danger"
                             style={{ borderRadius: 8, fontSize: 12 }}
-                            onClick={() => handleDelete(item.id)}>Hapus</button>
+                            onClick={() => handleDelete(item.id)}>
+                            <ActionIcon name="delete" size={14} />
+                            Hapus
+                          </button>
                         </div>
                       ) : (
                         <span style={{ fontSize: 12, color: 'var(--gray-400)', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -2009,6 +2115,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                 <p>Pilih soal dari Bank Soal sekolah ini untuk ditambahkan ke instrumen.</p>
               </div>
               <button type="button" className="btn btn-sm" onClick={closeBankSoalModal} disabled={usingBankSoal}>
+                <ActionIcon name="cancel" size={14} />
                 Tutup
               </button>
             </div>
@@ -2099,9 +2206,11 @@ Yakin ingin mengaktifkan instrumen ini?`,
 
             <div className="bank-soal-picker-actions">
               <button type="button" className="btn btn-primary btn-sm" onClick={applyBankSoalFilters}>
+                <ActionIcon name="filter" size={14} />
                 Terapkan Filter
               </button>
               <button type="button" className="btn btn-sm" onClick={resetBankSoalFilters}>
+                <ActionIcon name="reset" size={14} />
                 Reset
               </button>
             </div>
@@ -2161,6 +2270,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                                   className="btn btn-sm"
                                   onClick={() => setBankSoalDetail(bankSoalDetail?.id === item.id ? null : item)}
                                 >
+                                  <ActionIcon name={bankSoalDetail?.id === item.id ? 'cancel' : 'detail'} size={14} />
                                   {bankSoalDetail?.id === item.id ? 'Tutup' : 'Detail'}
                                 </button>
                               </td>
@@ -2202,6 +2312,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         disabled={bankSoalPage <= 1}
                         onClick={() => setBankSoalPage(prev => Math.max(1, prev - 1))}
                       >
+                        <ActionIcon name="previous" size={14} />
                         Sebelumnya
                       </button>
                       <button
@@ -2210,6 +2321,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
                         disabled={bankSoalPage >= (bankSoalMeta.total_pages || 1)}
                         onClick={() => setBankSoalPage(prev => prev + 1)}
                       >
+                        <ActionIcon name="next" size={14} />
                         Berikutnya
                       </button>
                     </div>
@@ -2222,6 +2334,7 @@ Yakin ingin mengaktifkan instrumen ini?`,
               <span>{selectedBankSoalIds.length} soal dipilih</span>
               <div>
                 <button type="button" className="btn" onClick={closeBankSoalModal} disabled={usingBankSoal}>
+                  <ActionIcon name="cancel" />
                   Batal
                 </button>
                 <button
@@ -2230,7 +2343,17 @@ Yakin ingin mengaktifkan instrumen ini?`,
                   onClick={addSelectedBankSoalToInstrumen}
                   disabled={usingBankSoal || selectedBankSoalIds.length === 0}
                 >
-                  {usingBankSoal ? 'Menambahkan...' : 'Tambahkan ke Instrumen'}
+                  {usingBankSoal ? (
+                    <>
+                      <span className="spinner" />
+                      Menambahkan...
+                    </>
+                  ) : (
+                    <>
+                      <ActionIcon name="add" />
+                      Tambahkan ke Instrumen
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -2245,10 +2368,20 @@ Yakin ingin mengaktifkan instrumen ini?`,
               <strong>Preview Gambar</strong>
               <div>
                 <span>{Math.round(zoomPreviewScale * 100)}%</span>
-                <button type="button" onClick={zoomPreviewOut} disabled={zoomPreviewScale <= 0.5}>-</button>
-                <button type="button" onClick={() => setZoomPreviewScale(1)}>Reset</button>
-                <button type="button" onClick={zoomPreviewIn} disabled={zoomPreviewScale >= 3}>+</button>
-                <button type="button" className="image-zoom-close" onClick={closePreviewImageZoom}>Tutup</button>
+                <button type="button" onClick={zoomPreviewOut} disabled={zoomPreviewScale <= 0.5}>
+                  <ActionIcon name="previous" size={14} />
+                </button>
+                <button type="button" onClick={() => setZoomPreviewScale(1)}>
+                  <ActionIcon name="reset" size={14} />
+                  Reset
+                </button>
+                <button type="button" onClick={zoomPreviewIn} disabled={zoomPreviewScale >= 3}>
+                  <ActionIcon name="next" size={14} />
+                </button>
+                <button type="button" className="image-zoom-close" onClick={closePreviewImageZoom}>
+                  <ActionIcon name="cancel" size={14} />
+                  Tutup
+                </button>
               </div>
             </div>
             <div className="image-zoom-preview">

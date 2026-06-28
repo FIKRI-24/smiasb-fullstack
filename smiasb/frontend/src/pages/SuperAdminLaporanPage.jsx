@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 const JENIS = ['Literasi', 'Numerasi', 'HOTS']
 const STATUS = ['draft', 'aktif', 'nonaktif']
@@ -164,9 +165,20 @@ export default function SuperAdminLaporanPage() {
 
         <div className="laporan-export-actions">
           <button className="btn btn-primary" onClick={exportExcel} disabled={loading || exporting}>
-            {exporting ? 'Membuat Excel...' : 'Export Excel'}
+            {exporting ? (
+              <>
+                <span className="spinner" />
+                Membuat Excel...
+              </>
+            ) : (
+              <>
+                <ActionIcon name="export" />
+                Export Excel
+              </>
+            )}
           </button>
           <button className="btn" disabled title="Export PDF akan ditambahkan pada tahap berikutnya.">
+            <ActionIcon name="export" />
             Export PDF
           </button>
         </div>
@@ -280,8 +292,14 @@ export default function SuperAdminLaporanPage() {
                   onChange={event => setSearch(event.target.value)}
                   onKeyDown={event => event.key === 'Enter' && handleSearch()}
                 />
-                <button className="btn" onClick={handleSearch}>Cari</button>
-                <button className="btn" onClick={resetFilters}>Reset</button>
+                <button className="btn" onClick={handleSearch}>
+                  <ActionIcon name="search" />
+                  Cari
+                </button>
+                <button className="btn" onClick={resetFilters}>
+                  <ActionIcon name="reset" />
+                  Reset
+                </button>
               </div>
             </div>
           </div>

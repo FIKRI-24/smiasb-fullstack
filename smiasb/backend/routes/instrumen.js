@@ -4034,6 +4034,7 @@ async function validateImportAccess(req, instrumenId) {
 
 const EXCEL_IMPORT_SHEETS = {
   SOAL: 'SOAL',
+  PILIHAN_JAWABAN: 'PILIHAN_JAWABAN',
   BENAR_SALAH: 'BENAR_SALAH',
   MENJODOHKAN: 'MENJODOHKAN',
   TABEL_PENDUKUNG: 'TABEL_PENDUKUNG',
@@ -4048,22 +4049,145 @@ const EXCEL_IMPORT_TYPES = new Set([
   'menjodohkan'
 ]);
 
-const EXCEL_IMPORT_SOAL_HEADER_ALIASES = {
-  nomor: ['nomor', 'no', 'no_soal', 'nomor_soal', 'no soal', 'nomor soal', 'soal_nomor', 'nomor_soal'],
-  pertanyaan: ['pertanyaan', 'soal', 'teks_soal', 'teks soal', 'question', 'pertanyaan_soal', 'isi_soal', 'isi soal'],
-  tipe_soal: ['tipe', 'tipe_soal', 'tipe soal', 'jenis', 'jenis_soal', 'jenis soal', 'type'],
-  pilihan_a: ['a', 'opsi_a', 'opsi a', 'pilihan_a', 'pilihan a', 'option_a', 'option a'],
-  pilihan_b: ['b', 'opsi_b', 'opsi b', 'pilihan_b', 'pilihan b', 'option_b', 'option b'],
-  pilihan_c: ['c', 'opsi_c', 'opsi c', 'pilihan_c', 'pilihan c', 'option_c', 'option c'],
-  pilihan_d: ['d', 'opsi_d', 'opsi d', 'pilihan_d', 'pilihan d', 'option_d', 'option d'],
-  pilihan_e: ['e', 'opsi_e', 'opsi e', 'pilihan_e', 'pilihan e', 'option_e', 'option e'],
-  kunci: ['kunci', 'jawaban', 'jawaban_benar', 'kunci_jawaban', 'jawaban benar', 'kunci jawaban', 'answer']
+const EXCEL_IMPORT_HEADER_ALIASES = {
+  [EXCEL_IMPORT_SHEETS.SOAL]: {
+    nomor: ['nomor', 'no', 'no_soal', 'nomor_soal', 'no soal', 'nomor soal', 'soal_nomor'],
+    tipe_soal: ['tipe', 'tipe_soal', 'tipe soal', 'jenis', 'jenis_soal', 'jenis soal', 'type'],
+    stimulus_teks: ['stimulus_teks', 'stimulus teks', 'stimulus', 'teks_stimulus', 'teks stimulus', 'stimulus_tambahan', 'bacaan'],
+    pertanyaan: ['pertanyaan', 'soal', 'teks_soal', 'teks soal', 'question', 'pertanyaan_soal', 'isi_soal', 'isi soal'],
+    pernyataan: ['pernyataan', 'statement'],
+    sebab: ['sebab', 'alasan', 'reason'],
+    kunci: ['kunci', 'jawaban', 'jawaban_benar', 'kunci_jawaban', 'jawaban benar', 'kunci jawaban', 'answer'],
+    pilihan_a: ['a', 'opsi_a', 'opsi a', 'pilihan_a', 'pilihan a', 'option_a', 'option a'],
+    pilihan_b: ['b', 'opsi_b', 'opsi b', 'pilihan_b', 'pilihan b', 'option_b', 'option b'],
+    pilihan_c: ['c', 'opsi_c', 'opsi c', 'pilihan_c', 'pilihan c', 'option_c', 'option c'],
+    pilihan_d: ['d', 'opsi_d', 'opsi d', 'pilihan_d', 'pilihan d', 'option_d', 'option d'],
+    pilihan_e: ['e', 'opsi_e', 'opsi e', 'pilihan_e', 'pilihan e', 'option_e', 'option e'],
+    pembahasan: ['pembahasan', 'bahasan', 'penjelasan', 'explanation'],
+    level_kognitif: ['level_kognitif', 'level kognitif', 'level', 'kognitif'],
+    mata_pelajaran: ['mata_pelajaran', 'mata pelajaran', 'mapel'],
+    kelas: ['kelas'],
+    materi: ['materi', 'topik'],
+    bobot: ['bobot', 'skor', 'nilai'],
+    layout: ['layout', 'urutan_tampilan', 'urutan tampilan'],
+    maksimal_pilihan: ['maksimal_pilihan', 'maksimal pilihan', 'maks_pilihan']
+  },
+  [EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN]: {
+    nomor_soal: ['nomor_soal', 'nomor soal', 'no_soal', 'no soal', 'nomor', 'no'],
+    kode_pilihan: ['kode_pilihan', 'kode pilihan', 'kode', 'opsi', 'pilihan', 'label'],
+    teks_pilihan: ['teks_pilihan', 'teks pilihan', 'pilihan_jawaban', 'pilihan jawaban', 'jawaban', 'isi_pilihan', 'isi pilihan'],
+    apakah_benar: ['apakah_benar', 'apakah benar', 'benar', 'is_benar', 'jawaban_benar', 'kunci', 'correct']
+  },
+  [EXCEL_IMPORT_SHEETS.BENAR_SALAH]: {
+    nomor_soal: ['nomor_soal', 'nomor soal', 'no_soal', 'no soal', 'nomor', 'no'],
+    nomor_item: ['nomor_item', 'nomor item', 'no_item', 'no item', 'nomor_pernyataan', 'nomor pernyataan', 'urutan'],
+    pernyataan: ['pernyataan', 'statement', 'teks_pernyataan', 'teks pernyataan'],
+    kunci: ['kunci', 'jawaban', 'jawaban_benar', 'kunci_jawaban', 'benar_salah', 'benar/salah']
+  },
+  [EXCEL_IMPORT_SHEETS.MENJODOHKAN]: {
+    nomor_soal: ['nomor_soal', 'nomor soal', 'no_soal', 'no soal', 'nomor', 'no'],
+    nomor_item: ['nomor_item', 'nomor item', 'no_item', 'no item', 'nomor_kiri', 'nomor kiri', 'urutan'],
+    teks_kiri: ['teks_kiri', 'teks kiri', 'kiri', 'item_kiri', 'item kiri', 'pernyataan'],
+    kode_kanan: ['kode_kanan', 'kode kanan', 'kode', 'label_kanan', 'label kanan'],
+    teks_kanan: ['teks_kanan', 'teks kanan', 'kanan', 'item_kanan', 'item kanan', 'pilihan'],
+    kunci: ['kunci', 'jawaban', 'pasangan', 'kode_jawaban', 'kode jawaban']
+  },
+  [EXCEL_IMPORT_SHEETS.TABEL_PENDUKUNG]: {
+    nomor_soal: ['nomor_soal', 'nomor soal', 'no_soal', 'no soal', 'nomor', 'no'],
+    nama_tabel: ['nama_tabel', 'nama tabel', 'judul_tabel', 'judul tabel', 'caption', 'tabel'],
+    baris: ['baris', 'row'],
+    kolom: ['kolom', 'column', 'col'],
+    isi_cell: ['isi_cell', 'isi cell', 'isi', 'teks', 'cell', 'nilai']
+  },
+  [EXCEL_IMPORT_SHEETS.MEDIA]: {
+    nomor_soal: ['nomor_soal', 'nomor soal', 'no_soal', 'no soal', 'nomor', 'no'],
+    jenis_media: ['jenis_media', 'jenis media', 'jenis', 'tipe_media', 'tipe media'],
+    nama_file: ['nama_file', 'nama file', 'file', 'filename', 'nama_gambar', 'nama gambar'],
+    caption: ['caption', 'judul', 'keterangan_gambar', 'keterangan gambar'],
+    sumber: ['sumber', 'source'],
+    keterangan: ['keterangan', 'catatan', 'deskripsi']
+  }
 };
 
 const SEBAB_AKIBAT_OPTIONS = {
   pilihan_c: 'Pernyataan benar dan alasan salah.',
   pilihan_d: 'Pernyataan salah dan alasan benar.'
 };
+
+function addExcelTemplateSheet(workbook, sheetName, headers, widths = []) {
+  const worksheet = XLSX.utils.aoa_to_sheet([headers]);
+  worksheet['!cols'] = headers.map((_, index) => ({ wch: widths[index] || 20 }));
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+}
+
+function buildExcelTemplateWorkbook() {
+  const workbook = XLSX.utils.book_new();
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.SOAL, [
+    'nomor',
+    'tipe_soal',
+    'stimulus_teks',
+    'pertanyaan',
+    'pernyataan',
+    'sebab',
+    'kunci',
+    'pembahasan',
+    'level_kognitif',
+    'mata_pelajaran',
+    'kelas',
+    'materi',
+    'bobot'
+  ], [10, 20, 36, 42, 36, 36, 12, 36, 18, 22, 14, 24, 10]);
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN, [
+    'nomor_soal',
+    'kode_pilihan',
+    'teks_pilihan',
+    'apakah_benar'
+  ], [12, 14, 48, 16]);
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.BENAR_SALAH, [
+    'nomor_soal',
+    'nomor_item',
+    'pernyataan',
+    'kunci'
+  ], [12, 12, 52, 14]);
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.MENJODOHKAN, [
+    'nomor_soal',
+    'nomor_item',
+    'teks_kiri',
+    'kode_kanan',
+    'teks_kanan',
+    'kunci'
+  ], [12, 12, 36, 14, 42, 12]);
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.TABEL_PENDUKUNG, [
+    'nomor_soal',
+    'nama_tabel',
+    'baris',
+    'kolom',
+    'isi_cell'
+  ], [12, 26, 10, 10, 44]);
+
+  addExcelTemplateSheet(workbook, EXCEL_IMPORT_SHEETS.MEDIA, [
+    'nomor_soal',
+    'jenis_media',
+    'nama_file',
+    'caption',
+    'sumber',
+    'keterangan'
+  ], [12, 16, 30, 36, 36, 42]);
+
+  workbook.Props = {
+    Title: 'Template Import Soal SMIASB',
+    Subject: 'Template Excel fleksibel untuk import soal SMIASB',
+    Author: 'SMIASB',
+    CreatedDate: new Date()
+  };
+
+  return workbook;
+}
 
 function normalizeExcelHeader(value = '') {
   return String(value || '')
@@ -4075,21 +4199,23 @@ function normalizeExcelHeader(value = '') {
     .replace(/^_+|_+$/g, '');
 }
 
-function mapExcelHeaderAlias(value = '') {
+function mapExcelHeaderAlias(value = '', sheetName = EXCEL_IMPORT_SHEETS.SOAL) {
   const normalized = normalizeExcelHeader(value);
   if (!normalized) return null;
-  for (const [key, aliases] of Object.entries(EXCEL_IMPORT_SOAL_HEADER_ALIASES)) {
-    if (aliases.includes(normalized)) return key;
+
+  const aliasesByField = EXCEL_IMPORT_HEADER_ALIASES[sheetName] || EXCEL_IMPORT_HEADER_ALIASES[EXCEL_IMPORT_SHEETS.SOAL];
+  for (const [key, aliases] of Object.entries(aliasesByField)) {
+    if (aliases.some(alias => normalizeExcelHeader(alias) === normalized)) return key;
   }
   return null;
 }
 
-function buildExcelHeaderMap(row = []) {
+function buildExcelHeaderMap(row = [], sheetName = EXCEL_IMPORT_SHEETS.SOAL) {
   const headerMap = {};
   if (!Array.isArray(row)) return headerMap;
 
   row.forEach((cell, index) => {
-    const key = mapExcelHeaderAlias(cell);
+    const key = mapExcelHeaderAlias(cell, sheetName);
     if (key && headerMap[key] === undefined) {
       headerMap[key] = index;
     }
@@ -4098,28 +4224,42 @@ function buildExcelHeaderMap(row = []) {
   return headerMap;
 }
 
-function scoreExcelHeaderMap(headerMap) {
-  if (!headerMap.pertanyaan) return 0;
+function scoreExcelHeaderMap(headerMap, sheetName = EXCEL_IMPORT_SHEETS.SOAL) {
+  if (!headerMap || Object.keys(headerMap).length === 0) return 0;
 
-  let score = 10;
-  if (headerMap.nomor !== undefined) score += 4;
-  if (headerMap.tipe_soal !== undefined) score += 2;
+  if (sheetName === EXCEL_IMPORT_SHEETS.SOAL) {
+    if (headerMap.nomor === undefined && headerMap.tipe_soal === undefined) return 0;
 
-  const choiceFields = ['pilihan_a', 'pilihan_b', 'pilihan_c', 'pilihan_d', 'pilihan_e'];
-  score += choiceFields.reduce((sum, field) => sum + (headerMap[field] !== undefined ? 1 : 0), 0);
-  if (headerMap.kunci !== undefined) score += 2;
+    let score = 0;
+    if (headerMap.nomor !== undefined) score += 8;
+    if (headerMap.tipe_soal !== undefined) score += 8;
+    ['pertanyaan', 'stimulus_teks', 'pernyataan', 'sebab', 'kunci', 'pembahasan'].forEach(field => {
+      if (headerMap[field] !== undefined) score += 2;
+    });
+    return score;
+  }
 
-  return score;
+  const requiredBySheet = {
+    [EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN]: ['nomor_soal', 'kode_pilihan', 'teks_pilihan'],
+    [EXCEL_IMPORT_SHEETS.BENAR_SALAH]: ['nomor_soal', 'pernyataan', 'kunci'],
+    [EXCEL_IMPORT_SHEETS.MENJODOHKAN]: ['nomor_soal', 'teks_kiri', 'teks_kanan', 'kunci'],
+    [EXCEL_IMPORT_SHEETS.TABEL_PENDUKUNG]: ['nomor_soal', 'baris', 'kolom', 'isi_cell'],
+    [EXCEL_IMPORT_SHEETS.MEDIA]: ['nomor_soal', 'nama_file']
+  };
+  const required = requiredBySheet[sheetName] || ['nomor_soal'];
+  const matchedRequired = required.filter(field => headerMap[field] !== undefined).length;
+
+  return matchedRequired === 0 ? 0 : matchedRequired * 4 + Object.keys(headerMap).length;
 }
 
-function findExcelSheetHeaderCandidate(rawRows = [], maxRows = 10) {
+function findExcelSheetHeaderCandidate(rawRows = [], maxRows = 10, sheetName = EXCEL_IMPORT_SHEETS.SOAL) {
   const limit = Math.min(maxRows, rawRows.length);
   let bestCandidate = null;
 
   for (let rowIndex = 0; rowIndex < limit; rowIndex += 1) {
     const row = rawRows[rowIndex];
-    const headerMap = buildExcelHeaderMap(row || []);
-    const score = scoreExcelHeaderMap(headerMap);
+    const headerMap = buildExcelHeaderMap(row || [], sheetName);
+    const score = scoreExcelHeaderMap(headerMap, sheetName);
 
     if (score > 0) {
       const labels = (Array.isArray(row) ? row : [])
@@ -4180,67 +4320,50 @@ function getWorkbookSheetName(workbook, expectedName) {
 }
 
 function readExcelSheet(workbook, expectedName) {
-  const requiredName = expectedName === EXCEL_IMPORT_SHEETS.SOAL ? EXCEL_IMPORT_SHEETS.SOAL : expectedName;
-  const exactSheetName = getWorkbookSheetName(workbook, requiredName);
-  const sheetNames = workbook.SheetNames || [];
+  const exactSheetName = getWorkbookSheetName(workbook, expectedName);
 
   const loadSheet = (sheetName) => {
     const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false });
-    const candidate = findExcelSheetHeaderCandidate(rawRows, 10);
+    const candidate = findExcelSheetHeaderCandidate(rawRows, 10, expectedName);
 
     if (candidate) {
       return {
         sheetName,
         rows: parseExcelSheetFromRawRows(rawRows, candidate.rowIndex, candidate.headerMap),
         headers: candidate.labels,
+        headerMap: candidate.headerMap,
+        headerKeys: Object.keys(candidate.headerMap),
         headerRowIndex: candidate.rowIndex
       };
     }
 
     if (rawRows.length > 0) {
-      const fallbackMap = buildExcelHeaderMap(rawRows[0] || []);
+      const fallbackMap = buildExcelHeaderMap(rawRows[0] || [], expectedName);
       return {
         sheetName,
         rows: parseExcelSheetFromRawRows(rawRows, 0, fallbackMap),
         headers: (Array.isArray(rawRows[0]) ? rawRows[0] : [])
           .map(cell => normalizeExcelHeader(cell))
           .filter(Boolean),
+        headerMap: fallbackMap,
+        headerKeys: Object.keys(fallbackMap),
         headerRowIndex: 0
       };
     }
 
-    return { sheetName, rows: [], headers: [], headerRowIndex: null };
+    return { sheetName, rows: [], headers: [], headerMap: {}, headerKeys: [], headerRowIndex: null };
   };
 
   if (exactSheetName) {
     return loadSheet(exactSheetName);
   }
 
-  if (expectedName !== EXCEL_IMPORT_SHEETS.SOAL) {
-    return { sheetName: null, rows: [] };
-  }
-
-  let best = null;
-  sheetNames.forEach(sheetName => {
-    const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false });
-    const candidate = findExcelSheetHeaderCandidate(rawRows, 10);
-    if (candidate && (!best || candidate.score > best.score)) {
-      best = { sheetName, rawRows, ...candidate };
-    }
-  });
-
-  if (best) {
-    return {
-      sheetName: best.sheetName,
-      rows: parseExcelSheetFromRawRows(best.rawRows, best.rowIndex, best.headerMap),
-      headers: best.labels,
-      headerRowIndex: best.rowIndex
-    };
-  }
-
   return {
     sheetName: null,
     rows: [],
+    headers: [],
+    headerMap: {},
+    headerKeys: [],
     headerInfo: describeWorkbookSheetHeaders(workbook)
   };
 }
@@ -4288,11 +4411,56 @@ function parseExcelChoiceKeys(value) {
     .sort();
 }
 
+function normalizeExcelQuestionType(value = '') {
+  const normalized = normalizeExcelHeader(value);
+  const aliases = {
+    pg: 'pilihan_ganda',
+    pilihan_ganda: 'pilihan_ganda',
+    multiple_choice: 'pilihan_ganda',
+    ganda_kompleks: 'ganda_kompleks',
+    pilihan_ganda_kompleks: 'ganda_kompleks',
+    kompleks: 'ganda_kompleks',
+    sebab_akibat: 'sebab_akibat',
+    sebab_dan_akibat: 'sebab_akibat',
+    benar_salah: 'benar_salah',
+    true_false: 'benar_salah',
+    bs: 'benar_salah',
+    menjodohkan: 'menjodohkan',
+    matching: 'menjodohkan',
+    jodohkan: 'menjodohkan'
+  };
+
+  return aliases[normalized] || normalized;
+}
+
+function parseExcelBooleanFlag(value) {
+  const normalized = normalizeExcelHeader(value);
+  if (['1', 'true', 'ya', 'y', 'yes', 'benar', 'b', 'x', 'v', 'check', 'checked'].includes(normalized)) return true;
+  if (['0', 'false', 'tidak', 'no', 'n', 'salah', 's', '-'].includes(normalized)) return false;
+  return false;
+}
+
+function parseExcelBenarSalahKey(value) {
+  const normalized = normalizeExcelHeader(value);
+  if (['benar', 'b', 'true', '1'].includes(normalized)) return 'benar';
+  if (['salah', 's', 'false', '0'].includes(normalized)) return 'salah';
+  return null;
+}
+
+function getExcelChoiceLabelsFromSoal(soal = {}) {
+  return ['A', 'B', 'C', 'D', 'E'].filter(label => {
+    const field = `pilihan_${label.toLowerCase()}`;
+    return htmlPlainText(soal[field] || '') !== '';
+  });
+}
+
 function combineExcelStimulus(row) {
+  const stimulus = getExcelHtml(row, 'stimulus_teks');
   const judul = getExcelHtml(row, 'judul_stimulus');
   const tambahan = getExcelHtml(row, 'stimulus_tambahan');
   const parts = [];
 
+  if (stimulus) parts.push(stimulus);
   if (judul) parts.push(`<p><strong>${judul}</strong></p>`);
   if (tambahan) parts.push(tambahan);
 
@@ -4369,6 +4537,9 @@ function buildExcelSupportingTables(rows = []) {
 
 function groupExcelRowsByNomor(rows = [], sheet, soalMap, expectedType, errors) {
   const grouped = new Map();
+  const expectedTypes = Array.isArray(expectedType)
+    ? expectedType
+    : (expectedType ? [expectedType] : []);
 
   rows.forEach(row => {
     const nomor = parseExcelNumber(row.nomor_soal);
@@ -4395,13 +4566,13 @@ function groupExcelRowsByNomor(rows = [], sheet, soalMap, expectedType, errors) 
       return;
     }
 
-    if (expectedType && soal.tipe_soal !== expectedType) {
+    if (expectedTypes.length > 0 && !expectedTypes.includes(soal.tipe_soal)) {
       pushExcelIssue(errors, {
         sheet,
         row: row.__row_number,
         nomor,
         field: 'nomor_soal',
-        message: `${sheet} baris ${row.__row_number}: nomor_soal ${nomor} bukan tipe ${expectedType}.`
+        message: `${sheet} baris ${row.__row_number}: nomor_soal ${nomor} bukan tipe ${expectedTypes.join(' atau ')}.`
       });
       return;
     }
@@ -4413,15 +4584,129 @@ function groupExcelRowsByNomor(rows = [], sheet, soalMap, expectedType, errors) 
   return grouped;
 }
 
+function applyExcelPilihanJawaban(soal, rows, errors) {
+  const correctKeys = [];
+  const seenCodes = new Set();
+
+  rows
+    .sort((a, b) => String(a.kode_pilihan || '').localeCompare(String(b.kode_pilihan || '')))
+    .forEach(row => {
+      const code = parseExcelChoiceKey(row.kode_pilihan);
+      const text = getExcelHtml(row, 'teks_pilihan');
+
+      if (!code) {
+        pushExcelIssue(errors, {
+          sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+          row: row.__row_number,
+          nomor: soal.nomor,
+          field: 'kode_pilihan',
+          message: `Soal nomor ${soal.nomor}: kode_pilihan harus A, B, C, D, atau E.`
+        });
+        return;
+      }
+
+      if (seenCodes.has(code)) {
+        pushExcelIssue(errors, {
+          sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+          row: row.__row_number,
+          nomor: soal.nomor,
+          field: 'kode_pilihan',
+          message: `Soal nomor ${soal.nomor}: kode_pilihan ${code} duplikat.`
+        });
+      }
+      seenCodes.add(code);
+
+      if (!text) {
+        pushExcelIssue(errors, {
+          sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+          row: row.__row_number,
+          nomor: soal.nomor,
+          field: 'teks_pilihan',
+          message: `Soal nomor ${soal.nomor}: teks_pilihan ${code} kosong.`
+        });
+      }
+
+      soal[`pilihan_${code.toLowerCase()}`] = text;
+      if (parseExcelBooleanFlag(row.apakah_benar)) correctKeys.push(code);
+    });
+
+  const uniqueCorrectKeys = [...new Set(correctKeys)].sort();
+  soal._excel_correct_keys = uniqueCorrectKeys;
+  soal.pilihan = ['A', 'B', 'C', 'D', 'E'].reduce((acc, label) => {
+    acc[label] = soal[`pilihan_${label.toLowerCase()}`] || '';
+    return acc;
+  }, {});
+
+  if (soal.tipe_soal === 'pilihan_ganda') {
+    if (uniqueCorrectKeys.length === 1) {
+      soal.jawaban_benar = uniqueCorrectKeys[0];
+    } else {
+      soal.jawaban_benar = null;
+    }
+  }
+
+  if (soal.tipe_soal === 'ganda_kompleks') {
+    soal.jawaban_benar_json = uniqueCorrectKeys;
+    soal.maksimal_pilihan = soal.maksimal_pilihan || (uniqueCorrectKeys.length > 0 ? uniqueCorrectKeys.length : null);
+  }
+}
+
+function validateExcelPilihanQuestion(soal, errors) {
+  const choiceLabels = getExcelChoiceLabelsFromSoal(soal);
+  const correctKeys = Array.isArray(soal._excel_correct_keys)
+    ? soal._excel_correct_keys
+    : (soal.tipe_soal === 'ganda_kompleks'
+      ? parseExcelChoiceKeys(Array.isArray(soal.jawaban_benar_json) ? soal.jawaban_benar_json.join(',') : soal.jawaban_benar_json)
+      : parseExcelChoiceKeys(soal.jawaban_benar));
+
+  if (choiceLabels.length === 0) {
+    pushExcelIssue(errors, {
+      sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+      nomor: soal.nomor,
+      field: 'teks_pilihan',
+      message: `Soal nomor ${soal.nomor}: ${soal.tipe_soal} tidak punya pilihan jawaban.`
+    });
+    return;
+  }
+
+  const missingCorrectChoice = correctKeys.find(key => !choiceLabels.includes(key));
+  if (missingCorrectChoice) {
+    pushExcelIssue(errors, {
+      sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+      nomor: soal.nomor,
+      field: 'apakah_benar',
+      message: `Soal nomor ${soal.nomor}: jawaban benar ${missingCorrectChoice} tidak memiliki teks pilihan.`
+    });
+  }
+
+  if (soal.tipe_soal === 'pilihan_ganda' && correctKeys.length !== 1) {
+    pushExcelIssue(errors, {
+      sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+      nomor: soal.nomor,
+      field: 'apakah_benar',
+      message: `Soal nomor ${soal.nomor}: pilihan_ganda harus memiliki tepat satu jawaban benar.`
+    });
+  }
+
+  if (soal.tipe_soal === 'ganda_kompleks' && correctKeys.length === 0) {
+    pushExcelIssue(errors, {
+      sheet: EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+      nomor: soal.nomor,
+      field: 'apakah_benar',
+      message: `Soal nomor ${soal.nomor}: ganda_kompleks harus memiliki minimal satu jawaban benar.`
+    });
+  }
+}
+
 function applyExcelBenarSalah(soal, rows, errors) {
   const pernyataan = [];
   const jawaban = {};
 
   rows
-    .sort((a, b) => Number(a.nomor_pernyataan || 0) - Number(b.nomor_pernyataan || 0))
+    .sort((a, b) => Number(a.nomor_item || a.nomor_pernyataan || 0) - Number(b.nomor_item || b.nomor_pernyataan || 0))
     .forEach((row, index) => {
       const text = getExcelHtml(row, 'pernyataan');
-      const rawJawaban = getExcelText(row, 'jawaban').toLowerCase();
+      const rawJawaban = parseExcelBenarSalahKey(row.kunci || row.jawaban);
 
       if (!text) {
         pushExcelIssue(errors, {
@@ -4433,18 +4718,18 @@ function applyExcelBenarSalah(soal, rows, errors) {
         });
       }
 
-      if (!['benar', 'salah'].includes(rawJawaban)) {
+      if (!rawJawaban) {
         pushExcelIssue(errors, {
           sheet: EXCEL_IMPORT_SHEETS.BENAR_SALAH,
           row: row.__row_number,
           nomor: soal.nomor,
-          field: 'jawaban',
+          field: 'kunci',
           message: `Soal nomor ${soal.nomor}: jawaban benar_salah harus Benar atau Salah.`
         });
       }
 
       pernyataan.push(text);
-      jawaban[String(index)] = rawJawaban === 'benar';
+      jawaban[String(index)] = rawJawaban ? rawJawaban === 'benar' : null;
     });
 
   soal.pernyataan_checklist = pernyataan;
@@ -4457,12 +4742,32 @@ function applyExcelMenjodohkan(soal, rows, errors) {
   const kananByKode = new Map();
   const kunciByKiri = new Map();
 
-  rows.forEach(row => {
-    const nomorKiri = parseExcelNumber(row.nomor_kiri);
+  rows.forEach((row, index) => {
+    const nomorKiri = parseExcelNumber(row.nomor_item || row.nomor_kiri) || index + 1;
     const teksKiri = getExcelHtml(row, 'teks_kiri');
     const kodeKanan = getExcelText(row, 'kode_kanan').toLowerCase();
     const teksKanan = getExcelHtml(row, 'teks_kanan');
     const kunci = getExcelText(row, 'kunci').toLowerCase();
+
+    if (!teksKiri) {
+      pushExcelIssue(errors, {
+        sheet: EXCEL_IMPORT_SHEETS.MENJODOHKAN,
+        row: row.__row_number,
+        nomor: soal.nomor,
+        field: 'teks_kiri',
+        message: `Soal nomor ${soal.nomor}: teks_kiri kosong pada sheet MENJODOHKAN.`
+      });
+    }
+
+    if (!kodeKanan || !teksKanan) {
+      pushExcelIssue(errors, {
+        sheet: EXCEL_IMPORT_SHEETS.MENJODOHKAN,
+        row: row.__row_number,
+        nomor: soal.nomor,
+        field: !kodeKanan ? 'kode_kanan' : 'teks_kanan',
+        message: `Soal nomor ${soal.nomor}: kode_kanan dan teks_kanan wajib diisi pada sheet MENJODOHKAN.`
+      });
+    }
 
     if (nomorKiri && teksKiri && !kiriByNomor.has(nomorKiri)) {
       kiriByNomor.set(nomorKiri, teksKiri);
@@ -4517,11 +4822,21 @@ function applyExcelMenjodohkan(soal, rows, errors) {
     kolom_kanan: kolomKanan,
     kunci
   };
+
+  if (kolomKiri.length < 2 || kolomKanan.length < 2) {
+    pushExcelIssue(errors, {
+      sheet: EXCEL_IMPORT_SHEETS.MENJODOHKAN,
+      nomor: soal.nomor,
+      field: 'nomor_item',
+      message: `Soal nomor ${soal.nomor}: menjodohkan minimal memiliki 2 pasangan.`
+    });
+  }
 }
 
 function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
   let nomor = parseExcelNumber(row.nomor);
-  const rawTipe = getExcelText(row, 'tipe_soal').toLowerCase();
+  const rawTipeText = getExcelText(row, 'tipe_soal');
+  const rawTipe = normalizeExcelQuestionType(rawTipeText);
   const rowErrors = [];
   const rowWarnings = [];
   const autoNomor = row.__row_number || seenNomor.size + 1;
@@ -4529,11 +4844,11 @@ function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
 
   if (!nomor) {
     nomor = autoNomor;
-    pushExcelIssue(rowWarnings, {
+    pushExcelIssue(rowErrors, {
       row: row.__row_number,
       nomor,
       field: 'nomor',
-      message: `Soal baris ${row.__row_number}: nomor tidak ditemukan, diisi otomatis.`
+      message: `Soal baris ${row.__row_number}: nomor wajib diisi di sheet SOAL.`
     });
   } else if (seenNomor.has(nomor)) {
     pushExcelIssue(rowErrors, {
@@ -4548,18 +4863,18 @@ function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
   if (EXCEL_IMPORT_TYPES.has(rawTipe)) {
     tipeSoal = rawTipe;
   } else if (rawTipe) {
-    pushExcelIssue(rowWarnings, {
+    pushExcelIssue(rowErrors, {
       row: row.__row_number,
       nomor,
       field: 'tipe_soal',
-      message: `Soal nomor ${nomorLabel}: tipe_soal "${rawTipe}" tidak dikenali, default ke pilihan_ganda.`
+      message: `Soal nomor ${nomorLabel}: tipe_soal "${rawTipeText}" tidak dikenal. Gunakan pilihan_ganda, ganda_kompleks, sebab_akibat, benar_salah, atau menjodohkan.`
     });
   } else {
-    pushExcelIssue(rowWarnings, {
+    pushExcelIssue(rowErrors, {
       row: row.__row_number,
       nomor,
       field: 'tipe_soal',
-      message: `Soal nomor ${nomorLabel}: tipe_soal tidak ditemukan, default ke pilihan_ganda.`
+      message: `Soal nomor ${nomorLabel}: tipe_soal wajib diisi.`
     });
   }
 
@@ -4604,70 +4919,12 @@ function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
   };
 
   if (soal.tipe_soal === 'pilihan_ganda') {
-    ['pilihan_a', 'pilihan_b', 'pilihan_c', 'pilihan_d'].forEach(field => {
-      if (!soal[field]) {
-        pushExcelIssue(rowErrors, {
-          row: row.__row_number,
-          nomor,
-          field,
-          message: `Soal nomor ${nomorLabel}: ${field} wajib diisi.`
-        });
-      }
-    });
-
     const key = parseExcelChoiceKey(row.kunci);
-    if (!key) {
-      pushExcelIssue(rowWarnings, {
-        row: row.__row_number,
-        nomor,
-        field: 'kunci',
-        message: `Soal nomor ${nomorLabel}: kunci jawaban belum terdeteksi dan perlu dilengkapi manual.`
-      });
-    }
-
-    if (key === 'E' && !soal.pilihan_e) {
-      pushExcelIssue(rowErrors, {
-        row: row.__row_number,
-        nomor,
-        field: 'pilihan_e',
-        message: `Soal nomor ${nomorLabel}: kunci E dipilih tetapi pilihan_e kosong.`
-      });
-    }
-
     soal.jawaban_benar = key || null;
   }
 
   if (soal.tipe_soal === 'ganda_kompleks') {
-    ['pilihan_a', 'pilihan_b', 'pilihan_c', 'pilihan_d'].forEach(field => {
-      if (!soal[field]) {
-        pushExcelIssue(rowErrors, {
-          row: row.__row_number,
-          nomor,
-          field,
-          message: `Soal nomor ${nomorLabel}: ${field} wajib diisi.`
-        });
-      }
-    });
-
     const keys = parseExcelChoiceKeys(row.kunci);
-    if (keys.length === 0) {
-      pushExcelIssue(rowWarnings, {
-        row: row.__row_number,
-        nomor,
-        field: 'kunci',
-        message: `Soal nomor ${nomorLabel}: kunci jawaban belum terdeteksi dan perlu dilengkapi manual.`
-      });
-    }
-
-    if (keys.includes('E') && !soal.pilihan_e) {
-      pushExcelIssue(rowErrors, {
-        row: row.__row_number,
-        nomor,
-        field: 'pilihan_e',
-        message: `Soal nomor ${nomorLabel}: kunci E dipilih tetapi pilihan_e kosong.`
-      });
-    }
-
     soal.jawaban_benar_json = keys.length > 0 ? keys : null;
     soal.maksimal_pilihan = soal.maksimal_pilihan || (keys.length > 0 ? keys.length : null) || null;
   }
@@ -4754,6 +5011,124 @@ function buildExcelQuestionPreview(row, instrumen, errors, seenNomor) {
   return soal;
 }
 
+function attachExcelIssuesToQuestions(soalPreview = [], errors = [], warnings = []) {
+  const errorsByNomor = new Map();
+  const warningsByNomor = new Map();
+
+  errors.forEach(issue => {
+    if (!issue.nomor) return;
+    const nomor = Number(issue.nomor);
+    if (!errorsByNomor.has(nomor)) errorsByNomor.set(nomor, []);
+    errorsByNomor.get(nomor).push(issue);
+  });
+
+  warnings.forEach(issue => {
+    if (!issue.nomor) return;
+    const nomor = Number(issue.nomor);
+    if (!warningsByNomor.has(nomor)) warningsByNomor.set(nomor, []);
+    warningsByNomor.get(nomor).push(issue);
+  });
+
+  soalPreview.forEach(soal => {
+    const nomor = Number(soal.nomor);
+    const soalErrors = errorsByNomor.get(nomor) || [];
+    const soalWarnings = warningsByNomor.get(nomor) || [];
+
+    soal.errors = [
+      ...(Array.isArray(soal.errors) ? soal.errors : []),
+      ...soalErrors
+    ].filter((item, index, arr) => (
+      arr.findIndex(candidate => candidate.message === item.message && candidate.row === item.row) === index
+    ));
+
+    soal.warnings = [
+      ...(Array.isArray(soal.warnings) ? soal.warnings : []),
+      ...soalWarnings
+    ].filter((item, index, arr) => (
+      arr.findIndex(candidate => candidate.message === item.message && candidate.row === item.row) === index
+    ));
+
+    if (soal.errors.length > 0) {
+      soal.status_parse = 'perlu_dicek';
+      soal.confidence = Math.min(Number(soal.confidence || 1), 0.65);
+    }
+
+    delete soal._excel_correct_keys;
+  });
+}
+
+function buildExcelPreviewRawText(originalName, sheetCounts, soalPreview, errors, warnings) {
+  const lines = [
+    `Import Excel SMIASB: ${originalName}`,
+    `Total soal dari sheet SOAL: ${soalPreview.length}`,
+    `Validasi: ${errors.length} error, ${warnings.length} warning`,
+    '',
+    'Jumlah baris per sheet:',
+    ...Object.entries(sheetCounts).map(([sheet, total]) => `- ${sheet}: ${total} baris`),
+    ''
+  ];
+
+  soalPreview.forEach((soal, index) => {
+    lines.push(`Soal ${soal.nomor || index + 1} [${soal.tipe_soal}]`);
+    if (htmlPlainText(soal.stimulus_tambahan || '')) {
+      lines.push(`Stimulus: ${htmlPlainText(soal.stimulus_tambahan)}`);
+    }
+    if (htmlPlainText(soal.pertanyaan || '')) {
+      lines.push(`Pertanyaan: ${htmlPlainText(soal.pertanyaan)}`);
+    }
+
+    if (['pilihan_ganda', 'ganda_kompleks'].includes(soal.tipe_soal)) {
+      getExcelChoiceLabelsFromSoal(soal).forEach(label => {
+        lines.push(`${label}. ${htmlPlainText(soal[`pilihan_${label.toLowerCase()}`] || '')}`);
+      });
+      const jawaban = soal.tipe_soal === 'ganda_kompleks'
+        ? (Array.isArray(soal.jawaban_benar_json) ? soal.jawaban_benar_json.join(', ') : '-')
+        : (soal.jawaban_benar || '-');
+      lines.push(`Jawaban benar: ${jawaban}`);
+    }
+
+    if (soal.tipe_soal === 'sebab_akibat') {
+      lines.push(`Pernyataan: ${htmlPlainText(soal.pilihan_a || '')}`);
+      lines.push(`Sebab: ${htmlPlainText(soal.pilihan_b || '')}`);
+      lines.push(`Jawaban benar: ${soal.jawaban_benar || '-'}`);
+    }
+
+    if (soal.tipe_soal === 'benar_salah') {
+      (soal.pernyataan_checklist || []).forEach((item, itemIndex) => {
+        const text = typeof item === 'string' ? item : item?.pernyataan || '';
+        const key = soal.jawaban_benar_json?.[String(itemIndex)] === true
+          ? 'Benar'
+          : soal.jawaban_benar_json?.[String(itemIndex)] === false
+            ? 'Salah'
+            : '-';
+        lines.push(`${itemIndex + 1}. ${htmlPlainText(text)} = ${key}`);
+      });
+    }
+
+    if (soal.tipe_soal === 'menjodohkan') {
+      const pasangan = soal.pasangan_menjodohkan || {};
+      (pasangan.kolom_kiri || []).forEach((item, itemIndex) => {
+        lines.push(`${itemIndex + 1}. ${htmlPlainText(item)} -> ${pasangan.kunci?.[String(itemIndex)] || '-'}`);
+      });
+      (pasangan.kolom_kanan || []).forEach((item) => {
+        lines.push(`${item.label}. ${htmlPlainText(item.text || '')}`);
+      });
+    }
+
+    (soal.supporting_tables || []).forEach((table, tableIndex) => {
+      lines.push(`Tabel ${tableIndex + 1}: ${table.caption || 'Tabel Pendukung'} (${(table.rows || []).length} baris)`);
+    });
+
+    (soal.media || []).forEach((media, mediaIndex) => {
+      lines.push(`Media ${mediaIndex + 1}: ${media.nama_file || '-'} | caption: ${media.caption || '-'} | sumber: ${media.sumber || '-'} | keterangan: ${media.keterangan || '-'}`);
+    });
+
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
 function buildImportQualityReportFromExcel(soalPreview, validationErrors, validationWarnings, targetCount) {
   return {
     source: 'excel',
@@ -4762,13 +5137,151 @@ function buildImportQualityReportFromExcel(soalPreview, validationErrors, valida
     validation_errors: validationErrors,
     validation_warnings: validationWarnings,
     save_blocked_reasons: validationErrors.map(item => item.message),
-    empty_options: validationErrors.filter(item => String(item.field || '').startsWith('pilihan_')),
-    empty_keys: validationErrors.filter(item => ['kunci', 'jawaban'].includes(item.field)),
+    empty_options: validationErrors.filter(item => (
+      String(item.field || '').startsWith('pilihan_') ||
+      item.field === 'teks_pilihan'
+    )),
+    empty_keys: validationErrors.filter(item => ['kunci', 'jawaban', 'apakah_benar'].includes(item.field)),
     missing_images_warning: [],
     missing_tables_warning: [],
     unmapped_images: [],
     unmapped_tables: []
   };
+}
+
+function getExcelSaveChoiceLabels(soal = {}) {
+  return ['A', 'B', 'C', 'D', 'E'].filter(label => Boolean(getImportChoiceValue(soal, label)));
+}
+
+function validateExcelImportPreviewBeforeSave(soalPreview = []) {
+  const errors = [];
+  const seenNomor = new Set();
+
+  soalPreview.forEach((soal, index) => {
+    const nomor = Number(soal.nomor || index + 1);
+    const tipe = soal.tipe_soal || '';
+    const pertanyaan = htmlPlainText(soal.pertanyaan || '');
+
+    if (seenNomor.has(nomor)) {
+      errors.push(`Soal nomor ${nomor} duplikat di preview Excel.`);
+    }
+    seenNomor.add(nomor);
+
+    if (!EXCEL_IMPORT_TYPES.has(tipe)) {
+      errors.push(`Soal nomor ${nomor} memiliki tipe_soal tidak valid.`);
+      return;
+    }
+
+    if (!pertanyaan) {
+      errors.push(`Soal nomor ${nomor} belum memiliki pertanyaan.`);
+    }
+
+    normalizeSupportingTables(soal).forEach((table, tableIndex) => {
+      if (table.source === 'manual' && !tableHasAnyText(table)) {
+        errors.push(`Soal nomor ${nomor} memiliki tabel manual kosong pada tabel ${tableIndex + 1}.`);
+      }
+    });
+
+    if (tipe === 'pilihan_ganda') {
+      const choiceLabels = getExcelSaveChoiceLabels(soal);
+      const answer = String(soal.jawaban_benar || '').trim().toUpperCase();
+
+      if (choiceLabels.length === 0) {
+        errors.push(`Soal nomor ${nomor} tidak punya pilihan jawaban.`);
+      }
+
+      if (!/^[A-E]$/.test(answer) || !choiceLabels.includes(answer)) {
+        errors.push(`Soal nomor ${nomor} harus memiliki tepat satu jawaban benar yang sesuai pilihan.`);
+      }
+    }
+
+    if (tipe === 'ganda_kompleks') {
+      const choiceLabels = getExcelSaveChoiceLabels(soal);
+      const answers = normalizeImportAnswerArray(soal.jawaban_benar_json);
+      const invalidAnswers = answers.filter(answer => !choiceLabels.includes(answer));
+
+      if (choiceLabels.length === 0) {
+        errors.push(`Soal nomor ${nomor} tidak punya pilihan jawaban.`);
+      }
+
+      if (answers.length === 0) {
+        errors.push(`Soal nomor ${nomor} harus memiliki minimal satu jawaban benar.`);
+      }
+
+      if (invalidAnswers.length > 0) {
+        errors.push(`Soal nomor ${nomor} memiliki jawaban benar yang tidak ada di pilihan: ${invalidAnswers.join(', ')}.`);
+      }
+    }
+
+    if (tipe === 'sebab_akibat') {
+      const answer = String(soal.jawaban_benar || '').trim().toUpperCase();
+      const pernyataan = htmlPlainText(soal.pilihan_a || '');
+      const sebab = htmlPlainText(soal.pilihan_b || '');
+
+      if (!pernyataan || !sebab) {
+        errors.push(`Soal nomor ${nomor} harus memiliki pernyataan dan sebab.`);
+      }
+
+      if (!['A', 'B', 'C', 'D'].includes(answer)) {
+        errors.push(`Soal nomor ${nomor} sebab_akibat harus memiliki kunci A/B/C/D.`);
+      }
+    }
+
+    if (tipe === 'benar_salah') {
+      const pernyataan = Array.isArray(soal.pernyataan_checklist) ? soal.pernyataan_checklist : [];
+      const jawaban = soal.jawaban_benar_json && typeof soal.jawaban_benar_json === 'object' && !Array.isArray(soal.jawaban_benar_json)
+        ? soal.jawaban_benar_json
+        : {};
+
+      if (pernyataan.length === 0) {
+        errors.push(`Soal nomor ${nomor} benar_salah wajib memiliki minimal satu pernyataan.`);
+      }
+
+      pernyataan.forEach((item, itemIndex) => {
+        const text = typeof item === 'string' ? item : item?.pernyataan;
+        const key = String(itemIndex);
+
+        if (!htmlPlainText(text || '')) {
+          errors.push(`Soal nomor ${nomor} memiliki pernyataan benar_salah kosong pada baris ${itemIndex + 1}.`);
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(jawaban, key) || typeof jawaban[key] !== 'boolean') {
+          errors.push(`Soal nomor ${nomor} memiliki kunci benar_salah tidak valid pada baris ${itemIndex + 1}.`);
+        }
+      });
+    }
+
+    if (tipe === 'menjodohkan') {
+      const pasangan = soal.pasangan_menjodohkan || {};
+      const kiri = Array.isArray(pasangan.kolom_kiri) ? pasangan.kolom_kiri : [];
+      const kanan = Array.isArray(pasangan.kolom_kanan) ? pasangan.kolom_kanan : [];
+      const kunci = pasangan.kunci || {};
+      const validLabels = new Set(kanan.map((item, itemIndex) => (
+        typeof item === 'string'
+          ? String.fromCharCode(97 + itemIndex)
+          : String(item?.label || String.fromCharCode(97 + itemIndex)).toLowerCase()
+      )));
+
+      if (kiri.length < 2 || kanan.length < 2) {
+        errors.push(`Soal nomor ${nomor} menjodohkan wajib memiliki minimal dua pasangan.`);
+      }
+
+      kiri.forEach((item, itemIndex) => {
+        const key = String(itemIndex);
+        const answer = String(kunci[key] || '').toLowerCase();
+
+        if (!htmlPlainText(item || '')) {
+          errors.push(`Soal nomor ${nomor} memiliki item kiri kosong pada baris ${itemIndex + 1}.`);
+        }
+
+        if (!answer || !validLabels.has(answer)) {
+          errors.push(`Soal nomor ${nomor} memiliki kunci menjodohkan tidak valid pada baris ${itemIndex + 1}.`);
+        }
+      });
+    }
+  });
+
+  return errors;
 }
 
 function buildExcelImportPreview(filePath, instrumen, originalName) {
@@ -4783,11 +5296,22 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
 
     return {
       fatal: true,
-      message: `Sheet soal tidak ditemukan. Sheet tersedia: ${sheetList}. Deteksi header kandidat: ${headerInfo}. Format minimal yang dibutuhkan: nomor/no, pertanyaan/soal, tipe/jenis, pilihan_a..e, kunci/jawaban.`,
+      message: `Sheet SOAL wajib ada. Sheet tersedia: ${sheetList}. Deteksi header kandidat: ${headerInfo}.`,
       data: null
     };
   }
 
+  const requiredSoalHeaders = ['nomor', 'tipe_soal'];
+  const missingSoalHeaders = requiredSoalHeaders.filter(field => soalSheet.headerMap?.[field] === undefined);
+  if (missingSoalHeaders.length > 0) {
+    return {
+      fatal: true,
+      message: `Sheet SOAL wajib memiliki kolom: ${missingSoalHeaders.join(', ')}.`,
+      data: null
+    };
+  }
+
+  const pilihanJawabanSheet = readExcelSheet(workbook, EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN);
   const benarSalahSheet = readExcelSheet(workbook, EXCEL_IMPORT_SHEETS.BENAR_SALAH);
   const menjodohkanSheet = readExcelSheet(workbook, EXCEL_IMPORT_SHEETS.MENJODOHKAN);
   const tabelSheet = readExcelSheet(workbook, EXCEL_IMPORT_SHEETS.TABEL_PENDUKUNG);
@@ -4796,6 +5320,13 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
   const soalPreview = soalSheet.rows.map(row => buildExcelQuestionPreview(row, instrumen, errors, seenNomor));
   const soalMap = new Map(soalPreview.map(soal => [Number(soal.nomor), soal]));
 
+  const pilihanJawabanByNomor = groupExcelRowsByNomor(
+    pilihanJawabanSheet.rows,
+    EXCEL_IMPORT_SHEETS.PILIHAN_JAWABAN,
+    soalMap,
+    ['pilihan_ganda', 'ganda_kompleks'],
+    errors
+  );
   const benarSalahByNomor = groupExcelRowsByNomor(
     benarSalahSheet.rows,
     EXCEL_IMPORT_SHEETS.BENAR_SALAH,
@@ -4826,6 +5357,14 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
   );
 
   soalPreview.forEach(soal => {
+    if (soal.tipe_soal === 'pilihan_ganda' || soal.tipe_soal === 'ganda_kompleks') {
+      const rows = pilihanJawabanByNomor.get(Number(soal.nomor)) || [];
+      if (rows.length > 0) {
+        applyExcelPilihanJawaban(soal, rows, errors);
+      }
+      validateExcelPilihanQuestion(soal, errors);
+    }
+
     if (soal.tipe_soal === 'benar_salah') {
       const rows = benarSalahByNomor.get(Number(soal.nomor)) || [];
       if (rows.length === 0) {
@@ -4858,6 +5397,14 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
           message: `Soal nomor ${soal.nomor}: menjodohkan tidak punya data di sheet MENJODOHKAN.`
         });
       } else {
+        if (rows.length < 2) {
+          pushExcelIssue(errors, {
+            sheet: EXCEL_IMPORT_SHEETS.MENJODOHKAN,
+            nomor: soal.nomor,
+            field: 'nomor_item',
+            message: `Soal nomor ${soal.nomor}: menjodohkan kurang dari 2 pasangan.`
+          });
+        }
         applyExcelMenjodohkan(soal, rows, errors);
       }
     }
@@ -4896,14 +5443,17 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
   });
 
   const targetCount = Number(instrumen.jumlah_soal || 0);
-  const qualityReport = buildImportQualityReportFromExcel(soalPreview, errors, warnings, targetCount);
   const sheetCounts = {
     SOAL: soalSheet.rows.length,
+    PILIHAN_JAWABAN: pilihanJawabanSheet.rows.length,
     BENAR_SALAH: benarSalahSheet.rows.length,
     MENJODOHKAN: menjodohkanSheet.rows.length,
     TABEL_PENDUKUNG: tabelSheet.rows.length,
     MEDIA: mediaSheet.rows.length
   };
+  attachExcelIssuesToQuestions(soalPreview, errors, warnings);
+  const qualityReport = buildImportQualityReportFromExcel(soalPreview, errors, warnings, targetCount);
+  const rawTextPreview = buildExcelPreviewRawText(originalName, sheetCounts, soalPreview, errors, warnings);
 
   return {
     fatal: false,
@@ -4928,7 +5478,7 @@ function buildExcelImportPreview(filePath, instrumen, originalName) {
       document_preview: {
         source: 'excel',
         raw_html: '',
-        raw_text: `Import Excel SMIASB: ${originalName}. Sheet SOAL berisi ${soalPreview.length} soal.`,
+        raw_text: rawTextPreview,
         blocks: Object.entries(sheetCounts).map(([sheet, total]) => ({
           tag: 'sheet',
           block_type: 'excel_sheet',
@@ -5748,6 +6298,25 @@ router.patch('/:id/batas-waktu', authenticate, authorize('guru', 'admin'), async
   }
 });
 
+router.get('/import-excel/template', authenticate, authorize('guru', 'admin'), async (req, res) => {
+  try {
+    const workbook = buildExcelTemplateWorkbook();
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="template-import-soal-smiasb.xlsx"');
+    res.setHeader('Content-Length', buffer.length);
+
+    return res.send(buffer);
+  } catch (err) {
+    console.error('ERROR DOWNLOAD EXCEL TEMPLATE:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Gagal membuat template Excel.'
+    });
+  }
+});
+
 // ============================================================
 // POST /api/instrumen/:id/import-word/preview
 // Preview isi file Word + ekstrak gambar + pecah menjadi soal.
@@ -6036,6 +6605,250 @@ router.post('/:id/import-word/preview', authenticate, authorize('guru', 'admin')
       message: 'Gagal membaca file Word.',
       error: err.message
     });
+  }
+});
+
+// ============================================================
+// POST /api/instrumen/:id/import-excel/save
+// Simpan soal hasil preview Excel ke tabel soal.
+// Tidak mengubah endpoint atau logic Import Word.
+// ============================================================
+router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), async (req, res) => {
+  let conn;
+
+  try {
+    const { id } = req.params;
+    let { soal_preview, replace_existing = false, auto_update_jumlah_soal = true } = req.body;
+
+    if (typeof soal_preview === 'string') {
+      try {
+        soal_preview = JSON.parse(soal_preview);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: 'Format soal_preview Excel tidak valid. Pastikan berupa array JSON.'
+        });
+      }
+    }
+
+    if (!Array.isArray(soal_preview) || soal_preview.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Data soal_preview Excel wajib diisi dan harus berupa array.'
+      });
+    }
+
+    const access = await validateImportAccess(req, id);
+
+    if (!access.ok) {
+      return res.status(access.status).json({
+        success: false,
+        message: access.message
+      });
+    }
+
+    const instrumen = access.instrumen;
+
+    const [hasilRows] = await pool.execute(
+      'SELECT COUNT(*) AS total FROM hasil_siswa WHERE instrumen_id = ?',
+      [id]
+    );
+
+    if (hasilRows[0].total > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Instrumen ini sudah memiliki hasil siswa. Import Excel tidak diizinkan agar data nilai tidak rusak.'
+      });
+    }
+
+    const [existingSoalRows] = await pool.execute(
+      'SELECT COUNT(*) AS total FROM soal WHERE instrumen_id = ?',
+      [id]
+    );
+
+    if (existingSoalRows[0].total > 0 && !replace_existing) {
+      return res.status(400).json({
+        success: false,
+        message: `Instrumen sudah memiliki ${existingSoalRows[0].total} soal. Reset soal lama dulu atau kirim replace_existing=true jika ingin mengganti semua soal.`
+      });
+    }
+
+    const validationErrors = validateExcelImportPreviewBeforeSave(soal_preview);
+    const importQualityReport = buildImportQualityReport(soal_preview, {
+      targetCount: Number(instrumen.jumlah_soal || 0)
+    });
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: validationErrors.slice(0, 5).join(' '),
+        errors: validationErrors,
+        import_quality_report: {
+          ...importQualityReport,
+          source: 'excel',
+          validation_errors: validationErrors.map(message => ({ message })),
+          save_blocked_reasons: validationErrors
+        }
+      });
+    }
+
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    if (replace_existing) {
+      await conn.execute('DELETE FROM jawaban_siswa WHERE instrumen_id = ?', [id]);
+      await conn.execute('DELETE FROM hasil_siswa WHERE instrumen_id = ?', [id]);
+      await conn.execute('DELETE FROM soal WHERE instrumen_id = ?', [id]);
+    }
+
+    if (auto_update_jumlah_soal) {
+      await conn.execute(
+        'UPDATE instrumen SET jumlah_soal = ?, updated_at = NOW() WHERE id = ?',
+        [soal_preview.length, id]
+      );
+    } else if (soal_preview.length > Number(instrumen.jumlah_soal || 0)) {
+      await conn.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: `Jumlah soal hasil import Excel (${soal_preview.length}) melebihi target instrumen (${instrumen.jumlah_soal}).`
+      });
+    }
+
+    const inserted = [];
+    const mediaMetadataCount = soal_preview.reduce(
+      (total, soal) => total + (Array.isArray(soal.media) ? soal.media.length : 0),
+      0
+    );
+
+    for (let index = 0; index < soal_preview.length; index++) {
+      const soal = soal_preview[index];
+      const tipeSoal = soal.tipe_soal || 'pilihan_ganda';
+      const nomor = soal.nomor || index + 1;
+      const normalizedImages = Array.isArray(soal.gambar)
+        ? soal.gambar.map(normalizeImportImageForSave).filter(image => image.file_name || image.src)
+        : [];
+
+      const gambarPertama =
+        normalizedImages.length > 0
+          ? (normalizedImages[0].file_name || getImageFileNameFromSrc(normalizedImages[0].src))
+          : (soal.gambar_soal || null);
+
+      const pilihanArray = Array.isArray(soal.pilihan) ? soal.pilihan : [];
+      const pilihanA = stripOptionLabelPrefix(soal.pilihan_a || pilihanArray[0] || '');
+      const pilihanB = stripOptionLabelPrefix(soal.pilihan_b || pilihanArray[1] || '');
+      const pilihanC = stripOptionLabelPrefix(soal.pilihan_c || pilihanArray[2] || '');
+      const pilihanD = stripOptionLabelPrefix(soal.pilihan_d || pilihanArray[3] || '');
+      const pilihanE = tipeSoal === 'sebab_akibat'
+        ? null
+        : stripOptionLabelPrefix(soal.pilihan_e || pilihanArray[4] || '');
+
+      const tabelDataForSave = getQuestionTablesForSave(soal, normalizedImages);
+      const tabelData = tabelDataForSave ? safeJsonStringify(tabelDataForSave) : null;
+
+      const jawabanBenarValue =
+        tipeSoal === 'ganda_kompleks'
+          ? normalizeImportAnswerArray(soal.jawaban_benar_json)
+          : soal.jawaban_benar_json;
+
+      const jawabanBenarJson =
+        jawabanBenarValue !== undefined &&
+        jawabanBenarValue !== null
+          ? safeJsonStringify(jawabanBenarValue)
+          : null;
+
+      const pasanganMenjodohkan = tipeSoal === 'menjodohkan' && soal.pasangan_menjodohkan
+        ? safeJsonStringify(sanitizeMatchingPayloadForSave(soal.pasangan_menjodohkan))
+        : null;
+
+      const pernyataanChecklist = tipeSoal === 'benar_salah' && soal.pernyataan_checklist
+        ? safeJsonStringify(sanitizeImportStatementList(soal.pernyataan_checklist))
+        : null;
+
+      const pertanyaanBase =
+        tipeSoal === 'sebab_akibat'
+          ? buildPertanyaanSebabAkibat(soal)
+          : (soal.pertanyaan || soal.raw_text || `Soal nomor ${nomor}`);
+      const hasLayoutBlocks = Array.isArray(soal.layout_blocks) && soal.layout_blocks.length > 0;
+      const pertanyaan = hasLayoutBlocks
+        ? sanitizeImportHtmlForSave(pertanyaanBase)
+        : buildPertanyaanWithImportSupport(
+            {
+              ...soal,
+              gambar: normalizedImages
+            },
+            pertanyaanBase
+          );
+
+      const kategori = soal.kategori_instrumen || instrumen.jenis || 'HOTS';
+      const bobot = Number(soal.bobot || 1);
+
+      const [result] = await conn.execute(
+        `INSERT INTO soal
+        (instrumen_id, nomor, pertanyaan, gambar_soal, tabel_data,
+         pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
+         jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
+         pasangan_menjodohkan, pernyataan_checklist)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          nomor,
+          pertanyaan,
+          gambarPertama,
+          tabelData,
+          pilihanA,
+          pilihanB,
+          pilihanC,
+          pilihanD,
+          pilihanE,
+          soal.jawaban_benar || null,
+          jawabanBenarJson,
+          tipeSoal,
+          kategori,
+          bobot,
+          pasanganMenjodohkan,
+          pernyataanChecklist
+        ]
+      );
+
+      inserted.push({
+        id: result.insertId,
+        nomor,
+        tipe_soal: tipeSoal
+      });
+    }
+
+    await conn.commit();
+
+    return res.status(201).json({
+      success: true,
+      message: `${inserted.length} soal berhasil disimpan dari hasil import Excel.`,
+      data: {
+        instrumen_id: Number(id),
+        total_disimpan: inserted.length,
+        soal: inserted,
+        metadata_media_preview_only: mediaMetadataCount,
+        catatan: mediaMetadataCount > 0
+          ? 'Metadata MEDIA dari Excel sudah tampil di preview. Karena tabel soal belum memiliki kolom media khusus, metadata media tidak dipaksa menjadi upload gambar.'
+          : 'Soal Excel berhasil disimpan mengikuti struktur soal sistem sekarang.'
+      }
+    });
+  } catch (err) {
+    console.error('ERROR IMPORT EXCEL SAVE:', err);
+
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {}
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Gagal menyimpan soal hasil import Excel.',
+      error: err.message
+    });
+  } finally {
+    if (conn) conn.release();
   }
 });
 

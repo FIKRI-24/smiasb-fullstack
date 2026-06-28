@@ -955,6 +955,10 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
       if (!['A', 'B', 'C', 'D'].includes(jawaban_benar)) {
         return res.status(400).json({ success: false, message: 'Jawaban benar harus A/B/C/D' });
       }
+      pilihan_a = null;
+      pilihan_b = null;
+      pilihan_c = null;
+      pilihan_d = null;
       pilihan_e = null;
     }
     else if (tipe_soal === 'ganda_kompleks' && (!jawaban_benar_json || JSON.parse(jawaban_benar_json).length === 0)) {
@@ -1086,6 +1090,11 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
       hasTabelDataPayload ? req.body.tabel_data : existingSoal[0].tabel_data,
       gambar_soal
     );
+    const pilihanAUpdate = tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_a || existingSoal[0].pilihan_a);
+    const pilihanBUpdate = tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_b || existingSoal[0].pilihan_b);
+    const pilihanCUpdate = tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_c || existingSoal[0].pilihan_c);
+    const pilihanDUpdate = tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_d || existingSoal[0].pilihan_d);
+    const pilihanEUpdate = tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_e || existingSoal[0].pilihan_e);
 
     await pool.execute(
       `UPDATE soal SET 
@@ -1099,11 +1108,11 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
         req.body.pertanyaan || existingSoal[0].pertanyaan,
         gambar_soal,
         tabelDataUpdate,
-        req.body.pilihan_a || existingSoal[0].pilihan_a,
-        req.body.pilihan_b || existingSoal[0].pilihan_b,
-        req.body.pilihan_c || existingSoal[0].pilihan_c,
-        req.body.pilihan_d || existingSoal[0].pilihan_d,
-        tipeUpdate === 'sebab_akibat' ? null : (req.body.pilihan_e || existingSoal[0].pilihan_e),
+        pilihanAUpdate,
+        pilihanBUpdate,
+        pilihanCUpdate,
+        pilihanDUpdate,
+        pilihanEUpdate,
         jawabanBenarUpdate,
         jawabanBenarJson,
         tipeUpdate,

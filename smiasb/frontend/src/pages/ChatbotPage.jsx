@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { chatbotAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 import { useAuth } from '../context/AuthContext'
 import { confirmToast, toast } from '../utils/notify'
 
@@ -145,7 +146,7 @@ export default function ChatbotPage() {
           </div>
         </div>
         <button className="btn btn-sm" onClick={handleClear} disabled={clearing} title="Hapus riwayat chat">
-          {clearing ? <span className="spinner spinner-dark" style={{width:14,height:14}} /> : 'Hapus riwayat'}
+          {clearing ? <span className="spinner spinner-dark" style={{width:14,height:14}} /> : <><ActionIcon name="delete" /> Hapus riwayat</>}
         </button>
       </div>
 
@@ -154,11 +155,12 @@ export default function ChatbotPage() {
         <div className="chat-suggestions">
           {isStudent && (
             <button className="chip" onClick={() => send(STUDENT_GUIDE_PROMPT)}>
+              <ActionIcon name="chat" size={14} />
               Petunjuk penggunaan sistem
             </button>
           )}
           {SUGGESTIONS.map(s => (
-            <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
+            <button key={s} className="chip" onClick={() => send(s)}><ActionIcon name="generate" size={14} /> {s}</button>
           ))}
         </div>
       )}
@@ -185,11 +187,12 @@ export default function ChatbotPage() {
         <div className="chat-suggestions" style={{marginBottom:8}}>
           {isStudent && (
             <button className="chip" onClick={() => send(STUDENT_GUIDE_PROMPT)}>
+              <ActionIcon name="chat" size={14} />
               Petunjuk penggunaan sistem
             </button>
           )}
           {['Contoh soal lainnya','Jelaskan lebih detail','Apa hubungannya dengan kurikulum Merdeka?'].map(s => (
-            <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
+            <button key={s} className="chip" onClick={() => send(s)}><ActionIcon name="generate" size={14} /> {s}</button>
           ))}
         </div>
       )}
@@ -212,7 +215,7 @@ export default function ChatbotPage() {
           disabled={loading || !input.trim()}
           style={{flexShrink:0}}
         >
-          {loading ? <span className="spinner" /> : 'Kirim'}
+          {loading ? <span className="spinner" /> : <><ActionIcon name="send" /> Kirim</>}
         </button>
       </div>
     </div>

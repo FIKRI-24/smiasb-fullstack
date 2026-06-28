@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  BookOpen,
+  CheckCircle2,
+  FileText,
+  Filter,
+  Layers,
+  Search,
+  Users
+} from "lucide-react";
+import ActionIcon from "../components/ActionIcon";
 import api from "../api";
 
 const normalizeJenis = (value) => {
@@ -24,6 +34,19 @@ const badgeClassByJenis = (jenis) => {
       return "monitoring-list-badge--jenis";
   }
 };
+
+const MonitoringSummaryCard = ({ label, value, note, icon: Icon, tone }) => (
+  <div className={`monitoring-list-summary-card tone-${tone}`}>
+    <div className="monitoring-list-summary-icon">
+      <Icon size={20} />
+    </div>
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <span>{note}</span>
+    </div>
+  </div>
+);
 
 const MonitoringListPage = () => {
   const navigate = useNavigate();
@@ -123,51 +146,71 @@ const MonitoringListPage = () => {
       </section>
 
       <section className="monitoring-list-summary-grid">
-        <div className="monitoring-list-summary-card">
-          <span>Total Instrumen</span>
-          <strong>{summary.totalInstrumen}</strong>
-          <span>Instrumen aktif yang tersedia untuk monitoring.</span>
-        </div>
-        <div className="monitoring-list-summary-card">
-          <span>Instrumen Aktif</span>
-          <strong>{summary.totalAktif}</strong>
-          <span>Semua instrumen yang diambil memang berstatus aktif.</span>
-        </div>
-        <div className="monitoring-list-summary-card">
-          <span>Total Target Soal</span>
-          <strong>{summary.totalTargetSoal}</strong>
-          <span>Jumlah soal keseluruhan dari instrumen aktif.</span>
-        </div>
-        <div className="monitoring-list-summary-card">
-          <span>Total Kelas</span>
-          <strong>{summary.totalKelas}</strong>
-          <span>Jumlah kelas unik yang terhubung dengan instrumen.</span>
-        </div>
+        <MonitoringSummaryCard
+          label="Total Instrumen"
+          value={summary.totalInstrumen}
+          note="Instrumen aktif yang tersedia untuk monitoring."
+          icon={FileText}
+          tone="blue"
+        />
+        <MonitoringSummaryCard
+          label="Instrumen Aktif"
+          value={summary.totalAktif}
+          note="Semua instrumen siap dipantau."
+          icon={CheckCircle2}
+          tone="green"
+        />
+        <MonitoringSummaryCard
+          label="Total Target Soal"
+          value={summary.totalTargetSoal}
+          note="Jumlah soal dari seluruh instrumen aktif."
+          icon={BookOpen}
+          tone="amber"
+        />
+        <MonitoringSummaryCard
+          label="Total Kelas"
+          value={summary.totalKelas}
+          note="Kelas unik yang terhubung dengan instrumen."
+          icon={Layers}
+          tone="purple"
+        />
       </section>
 
       <section className="monitoring-list-filter-bar">
         <div className="monitoring-list-filter-item">
-          <label htmlFor="monitoring-search">Cari instrumen</label>
-          <input
-            id="monitoring-search"
-            type="search"
-            value={searchQuery}
-            placeholder="Cari judul, mata pelajaran, atau kelas"
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+          <label htmlFor="monitoring-search">
+            <Search size={14} />
+            Cari instrumen
+          </label>
+          <div className="monitoring-list-input-wrap">
+            <Search size={16} />
+            <input
+              id="monitoring-search"
+              type="search"
+              value={searchQuery}
+              placeholder="Cari judul, mata pelajaran, atau kelas"
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
 
         <div className="monitoring-list-filter-item">
-          <label htmlFor="monitoring-filter-jenis">Filter jenis</label>
-          <select
-            id="monitoring-filter-jenis"
-            value={filterJenis}
-            onChange={(e) => setFilterJenis(e.target.value)}
-          >
-            {jenisOptions.map((jenis) => (
-              <option key={jenis} value={jenis}>{jenis}</option>
-            ))}
-          </select>
+          <label htmlFor="monitoring-filter-jenis">
+            <Filter size={14} />
+            Filter jenis
+          </label>
+          <div className="monitoring-list-input-wrap">
+            <Filter size={16} />
+            <select
+              id="monitoring-filter-jenis"
+              value={filterJenis}
+              onChange={(e) => setFilterJenis(e.target.value)}
+            >
+              {jenisOptions.map((jenis) => (
+                <option key={jenis} value={jenis}>{jenis}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </section>
 
@@ -209,13 +252,24 @@ const MonitoringListPage = () => {
                 <h3 className="monitoring-list-card-title">{item.judul || "-"}</h3>
 
                 <div className="monitoring-list-card-meta">
-                  <span>{item.mata_pelajaran || "-"}</span>
-                  <span>Kelas {item.kelas || "-"}</span>
+                  <span><BookOpen size={14} /> {item.mata_pelajaran || "-"}</span>
+                  <span><Users size={14} /> Kelas {item.kelas || "-"}</span>
+                </div>
+
+                <div className="monitoring-list-card-stats">
+                  <div>
+                    <span>Target soal</span>
+                    <strong>{Number(item.jumlah_soal || 0)}</strong>
+                  </div>
+                  <div>
+                    <span>Status</span>
+                    <strong>Aktif</strong>
+                  </div>
                 </div>
 
                 <div className="monitoring-list-card-footer">
                   <div className="monitoring-list-card-info">
-                    Target soal <strong>{Number(item.jumlah_soal || 0)}</strong>
+                    Siap dipantau
                   </div>
                   <button
                     type="button"
@@ -225,7 +279,9 @@ const MonitoringListPage = () => {
                       navigate(`/monitoring/${item.id}`);
                     }}
                   >
+                    <ActionIcon name="detail" />
                     Lihat Hasil
+                    <ActionIcon name="next" />
                   </button>
                 </div>
               </div>

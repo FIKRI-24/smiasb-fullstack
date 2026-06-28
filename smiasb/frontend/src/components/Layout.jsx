@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import ActionIcon from './ActionIcon'
 
 const NAV_ITEMS = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['admin', 'admin_sekolah', 'guru', 'siswa'] },
@@ -156,6 +157,7 @@ export default function Layout() {
             style={{ width: '100%', marginTop: 10, fontSize: 12, justifyContent: 'center' }}
             onClick={handleLogout}
           >
+            <ActionIcon name="logout" />
             Keluar
           </button>
         </div>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 import { confirmToast, toast } from '../utils/notify'
 
 const emptyForm = {
@@ -196,6 +197,7 @@ export default function AdminSekolahPage() {
           <p>Kelola akun admin yang bertanggung jawab pada masing-masing sekolah.</p>
         </div>
         <button className="btn btn-primary" onClick={openCreateModal}>
+          <ActionIcon name="add" />
           Tambah Admin Sekolah
         </button>
       </section>
@@ -266,12 +268,13 @@ export default function AdminSekolahPage() {
                     <td>{formatDate(admin.created_at)}</td>
                     <td>
                       <div className="school-actions">
-                        <button className="btn btn-sm" onClick={() => openEditModal(admin)}>Edit</button>
-                        <button className="btn btn-sm" onClick={() => openResetModal(admin)}>Edit Password</button>
+                        <button className="btn btn-sm" onClick={() => openEditModal(admin)}><ActionIcon name="edit" /> Edit</button>
+                        <button className="btn btn-sm" onClick={() => openResetModal(admin)}><ActionIcon name="key" /> Edit Password</button>
                         <button
                           className={admin.is_aktif ? 'btn btn-sm btn-danger' : 'btn btn-sm'}
                           onClick={() => handleToggleStatus(admin)}
                         >
+                          <ActionIcon name={admin.is_aktif ? 'cancel' : 'check'} />
                           {admin.is_aktif ? 'Nonaktifkan' : 'Aktifkan'}
                         </button>
                       </div>
@@ -386,9 +389,9 @@ function AdminSekolahModal({ mode, form, schools, saving, error, onClose, onChan
         </div>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onClose} disabled={saving}>Batal</button>
+          <button className="btn" onClick={onClose} disabled={saving}><ActionIcon name="cancel" /> Batal</button>
           <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-            {saving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan'}
+            {saving ? <><span className="spinner" /> Menyimpan...</> : <><ActionIcon name="save" /> Simpan</>}
           </button>
         </div>
       </div>
@@ -430,9 +433,9 @@ function ResetPasswordModal({ admin, form, saving, error, onClose, onChange, onS
         </div>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onClose} disabled={saving}>Batal</button>
+          <button className="btn" onClick={onClose} disabled={saving}><ActionIcon name="cancel" /> Batal</button>
           <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-            {saving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan Password'}
+            {saving ? <><span className="spinner" /> Menyimpan...</> : <><ActionIcon name="save" /> Simpan Password</>}
           </button>
         </div>
       </div>

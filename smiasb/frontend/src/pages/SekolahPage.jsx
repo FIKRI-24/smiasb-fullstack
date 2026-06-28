@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { sekolahAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 import { confirmToast, toast } from '../utils/notify'
 
 const emptyForm = {
@@ -138,6 +139,7 @@ export default function SekolahPage() {
           <p>Kelola data sekolah yang menggunakan sistem instrumen.</p>
         </div>
         <button className="btn btn-primary" onClick={openCreateModal}>
+          <ActionIcon name="add" />
           Tambah Sekolah
         </button>
       </section>
@@ -206,12 +208,13 @@ export default function SekolahPage() {
                     </td>
                     <td>
                       <div className="school-actions">
-                        <button className="btn btn-sm" onClick={() => openDetailModal(school)}>Detail</button>
-                        <button className="btn btn-sm" onClick={() => openEditModal(school)}>Edit</button>
+                        <button className="btn btn-sm" onClick={() => openDetailModal(school)}><ActionIcon name="detail" /> Detail</button>
+                        <button className="btn btn-sm" onClick={() => openEditModal(school)}><ActionIcon name="edit" /> Edit</button>
                         <button
                           className={school.status === 'aktif' ? 'btn btn-sm btn-danger' : 'btn btn-sm'}
                           onClick={() => handleToggleStatus(school)}
                         >
+                          <ActionIcon name={school.status === 'aktif' ? 'cancel' : 'check'} />
                           {school.status === 'aktif' ? 'Nonaktifkan' : 'Aktifkan'}
                         </button>
                       </div>
@@ -337,11 +340,12 @@ function SekolahModal({ mode, form, school, saving, error, onClose, onChange, on
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose} disabled={saving}>
+            <ActionIcon name={isDetail ? 'cancel' : 'cancel'} />
             {isDetail ? 'Tutup' : 'Batal'}
           </button>
           {!isDetail && (
             <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-              {saving ? <><span className="spinner" /> Menyimpan...</> : 'Simpan'}
+              {saving ? <><span className="spinner" /> Menyimpan...</> : <><ActionIcon name="save" /> Simpan</>}
             </button>
           )}
         </div>

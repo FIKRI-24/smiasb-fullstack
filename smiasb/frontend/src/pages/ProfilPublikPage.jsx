@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { userAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 export default function ProfilPublikPage() {
   const { id } = useParams()
@@ -122,6 +123,7 @@ export default function ProfilPublikPage() {
             gap: 4
           }}
         >
+          <ActionIcon name="back" size={14} />
           Kembali
         </button>
 

@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { KELAS } from '../constants/classes'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
+import ActionIcon from '../components/ActionIcon'
 import {
   BookOpenCheck,
   AlignCenter,
@@ -15,6 +16,7 @@ import {
   Bold,
   Clock3,
   CopyPlus,
+  Download,
   FilePlus2,
   FileText,
   Filter,
@@ -1538,6 +1540,121 @@ const validateImportPreview = (list = []) => {
   return errors
 }
 
+const validateExcelImportPreview = (list = []) => {
+  const errors = []
+  const normalizedList = normalizeImportPreviewList(list)
+  const seenNomor = new Set()
+
+  normalizedList.forEach((soal, index) => {
+    const nomor = Number(soal.nomor || index + 1)
+    const tipe = soal.tipe_soal
+
+    if (seenNomor.has(nomor)) {
+      errors.push(`Soal nomor ${nomor} duplikat di preview Excel.`)
+    }
+    seenNomor.add(nomor)
+
+    if (!TIPE_SOAL_OPTIONS.includes(tipe)) {
+      errors.push(`Soal nomor ${nomor} memiliki tipe soal tidak valid.`)
+      return
+    }
+
+    if (isHtmlEmpty(soal.pertanyaan || '')) {
+      errors.push(`Soal nomor ${nomor} belum memiliki pertanyaan.`)
+    }
+
+    if (tipe === 'pilihan_ganda') {
+      const pilihanTerisi = PILIHAN_LABELS.filter(label => !isHtmlEmpty(getChoiceText(soal, label)))
+
+      if (pilihanTerisi.length === 0) {
+        errors.push(`Soal nomor ${nomor} tidak punya pilihan jawaban.`)
+      }
+
+      if (!soal.jawaban_benar || !pilihanTerisi.includes(soal.jawaban_benar)) {
+        errors.push(`Soal nomor ${nomor} harus memiliki tepat satu jawaban benar yang sesuai pilihan.`)
+      }
+    }
+
+    if (tipe === 'ganda_kompleks') {
+      const pilihanTerisi = PILIHAN_LABELS.filter(label => !isHtmlEmpty(getChoiceText(soal, label)))
+      const jawaban = normalizeJawabanKompleks(soal.jawaban_benar_json)
+      const jawabanTidakAda = jawaban.filter(label => !pilihanTerisi.includes(label))
+
+      if (pilihanTerisi.length === 0) {
+        errors.push(`Soal nomor ${nomor} tidak punya pilihan jawaban.`)
+      }
+
+      if (jawaban.length === 0) {
+        errors.push(`Soal nomor ${nomor} harus memiliki minimal satu jawaban benar.`)
+      }
+
+      if (jawabanTidakAda.length > 0) {
+        errors.push(`Soal nomor ${nomor} memiliki jawaban benar yang tidak ada di pilihan: ${jawabanTidakAda.join(', ')}.`)
+      }
+    }
+
+    if (tipe === 'sebab_akibat') {
+      if (!soal.jawaban_benar || !PILIHAN_WAJIB_LABELS.includes(soal.jawaban_benar)) {
+        errors.push(`Soal nomor ${nomor} sebab-akibat harus memiliki kunci A/B/C/D.`)
+      }
+    }
+
+    if (tipe === 'benar_salah') {
+      const pernyataan = Array.isArray(soal.pernyataan_checklist) ? soal.pernyataan_checklist : []
+      const jawaban = soal.jawaban_benar_json && typeof soal.jawaban_benar_json === 'object'
+        ? soal.jawaban_benar_json
+        : {}
+
+      if (pernyataan.length === 0) {
+        errors.push(`Soal nomor ${nomor} benar-salah wajib memiliki minimal satu pernyataan.`)
+      }
+
+      pernyataan.forEach((item, itemIndex) => {
+        const teks = typeof item === 'string' ? item : item?.pernyataan
+        const key = String(itemIndex)
+
+        if (isHtmlEmpty(teks || '')) {
+          errors.push(`Soal nomor ${nomor} memiliki pernyataan benar-salah kosong pada baris ${itemIndex + 1}.`)
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(jawaban, key) || typeof jawaban[key] !== 'boolean') {
+          errors.push(`Soal nomor ${nomor} memiliki kunci benar-salah tidak valid pada baris ${itemIndex + 1}.`)
+        }
+      })
+    }
+
+    if (tipe === 'menjodohkan') {
+      const pasangan = soal.pasangan_menjodohkan || {}
+      const kiri = Array.isArray(pasangan.kolom_kiri) ? pasangan.kolom_kiri : []
+      const kanan = Array.isArray(pasangan.kolom_kanan) ? pasangan.kolom_kanan : []
+      const kunci = pasangan.kunci || {}
+      const validLabels = new Set(kanan.map((item, itemIndex) => (
+        typeof item === 'string'
+          ? String.fromCharCode(97 + itemIndex)
+          : String(item?.label || String.fromCharCode(97 + itemIndex)).toLowerCase()
+      )))
+
+      if (kiri.length < 2 || kanan.length < 2) {
+        errors.push(`Soal nomor ${nomor} menjodohkan wajib memiliki minimal dua pasangan.`)
+      }
+
+      kiri.forEach((item, itemIndex) => {
+        const answer = String(kunci[String(itemIndex)] || '').toLowerCase()
+
+        if (isHtmlEmpty(item || '')) {
+          errors.push(`Soal nomor ${nomor} memiliki item kiri kosong pada baris ${itemIndex + 1}.`)
+        }
+
+        if (!answer || !validLabels.has(answer)) {
+          errors.push(`Soal nomor ${nomor} memiliki kunci menjodohkan tidak valid pada baris ${itemIndex + 1}.`)
+        }
+      })
+    }
+  })
+
+  return errors
+}
+
 const updatePilihanImport = (index, label, value) => {
   setImportPreview(prev => prev.map((soal, i) => {
     if (i !== index) return soal
@@ -2449,6 +2566,72 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
     }
   }
 
+  const handleSaveImportExcel = async () => {
+    if (!importItem) {
+      const message = 'Instrumen belum dipilih.'
+      setImportError(message)
+      toast.error(message)
+      return
+    }
+
+    if (importPreview.length === 0) {
+      const message = 'Belum ada data preview Excel untuk disimpan.'
+      setImportError(message)
+      toast.error(message)
+      return
+    }
+
+    const normalizedPreview = buildSaveImportPayload(importPreview)
+    const validationErrors = validateExcelImportPreview(normalizedPreview)
+    if (validationErrors.length > 0) {
+      const message = validationErrors.slice(0, 5).join(' ')
+      setImportError(message)
+      toast.error(message)
+      setImportTab('questions')
+      return
+    }
+
+    const ok = await confirmToast(
+      `Simpan ${importPreview.length} soal Excel ke instrumen "${importItem.judul}"?`,
+      {
+        title: 'Simpan Import Excel?',
+        confirmText: 'Simpan',
+        cancelText: 'Batal'
+      }
+    )
+
+    if (!ok) return
+
+    setImportSaving(true)
+    setImportError('')
+    setImportSuccess('')
+    setImportPreview(normalizedPreview)
+
+    try {
+      const res = await instrumenAPI.saveImportExcel(importItem.id, {
+        soal_preview: normalizedPreview
+      })
+
+      setImportSuccess(res.data.message || 'Soal Excel berhasil disimpan.')
+      toast.success(`${res.data.data?.total_disimpan || importPreview.length} soal Excel berhasil disimpan`)
+      clearImportDraft(importItem.id, importMode)
+
+      setShowImportModal(false)
+      setImportItem(null)
+      resetImportSession('excel')
+      fetchData(pagination.page)
+    } catch (err) {
+      const message = err.response?.data?.message || 'Gagal menyimpan soal hasil import Excel.'
+      if (err.response?.data?.import_quality_report) {
+        setImportQualityReport(err.response.data.import_quality_report)
+      }
+      setImportError(message)
+      toast.error(message)
+    } finally {
+      setImportSaving(false)
+    }
+  }
+
   const getFlexAlign = (align = 'center') => {
     if (align === 'left') return 'flex-start'
     if (align === 'right') return 'flex-end'
@@ -2869,6 +3052,23 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
     }
   }
 
+  const handleDownloadImportExcelTemplate = async () => {
+    try {
+      const res = await instrumenAPI.downloadImportExcelTemplate()
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'template-import-soal-smiasb.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success('Template Excel berhasil diunduh')
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Gagal mengunduh template Excel')
+    }
+  }
+
   const handleSearch = (e) => {
     e.preventDefault()
     fetchData(1)
@@ -3012,10 +3212,21 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
               <div style={{ display: 'flex', gap: 10 }}>
                 <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                  {saving ? 'Menyimpan...' : 'Simpan'}
+                  {saving ? (
+                    <>
+                      <span className="spinner" />
+                      Menyimpan...
+                    </>
+                  ) : (
+                    <>
+                      <ActionIcon name="save" />
+                      Simpan
+                    </>
+                  )}
                 </button>
 
                 <button className="btn" onClick={() => setShowModal(false)}>
+                  <ActionIcon name="cancel" />
                   Batal
                 </button>
               </div>
@@ -3075,9 +3286,20 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button className="btn btn-primary" onClick={handleSaveBatasWaktu} disabled={saving}>
-                  {saving ? 'Menyimpan...' : 'Simpan Perubahan'}
+                  {saving ? (
+                    <>
+                      <span className="spinner" />
+                      Menyimpan...
+                    </>
+                  ) : (
+                    <>
+                      <ActionIcon name="save" />
+                      Simpan Perubahan
+                    </>
+                  )}
                 </button>
                 <button className="btn" onClick={() => setShowBatasWaktuModal(false)}>
+                  <ActionIcon name="cancel" />
                   Batal
                 </button>
               </div>
@@ -3173,10 +3395,21 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
                 <button className="btn" onClick={closeDuplicateInstrument} disabled={duplicateSaving}>
+                  <ActionIcon name="cancel" />
                   Batal
                 </button>
                 <button className="btn btn-primary" onClick={handleDuplicateInstrument} disabled={duplicateSaving}>
-                  {duplicateSaving ? 'Menyimpan...' : 'Gunakan untuk Kelas Lain'}
+                  {duplicateSaving ? (
+                    <>
+                      <span className="spinner" />
+                      Menyimpan...
+                    </>
+                  ) : (
+                    <>
+                      <ActionIcon name="use" />
+                      Gunakan untuk Kelas Lain
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -3254,15 +3487,36 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
           onChange={handleImportFileChange}
         />
 
+        {importMode === 'excel' && (
+          <button
+            type="button"
+            className="btn"
+            onClick={handleDownloadImportExcelTemplate}
+            disabled={importLoading || importSaving}
+            title="Unduh template Excel resmi SMIASB"
+          >
+            <ActionIcon name="download" size={14} />
+            Download Template Excel
+          </button>
+        )}
+
         <button
           className="btn btn-primary"
           onClick={importMode === 'excel' ? handlePreviewImportExcel : handlePreviewImportWord}
-          disabled={importLoading || importSaving || importMode === 'excel'}
-          title={importMode === 'excel' ? 'Import Excel masih tahap eksperimen. Gunakan Import Word untuk saat ini.' : ''}
+          disabled={importLoading || importSaving}
+          title={importMode === 'excel' ? 'Baca dan preview file Excel sesuai template SMIASB.' : ''}
         >
-          {importLoading
-            ? (importMode === 'excel' ? 'Membaca Excel...' : 'Membaca Word...')
-            : (importMode === 'excel' ? 'Preview Excel (Eksperimen)' : 'Preview Word')}
+          {importLoading ? (
+            <>
+              <span className="spinner" />
+              {importMode === 'excel' ? 'Membaca Excel...' : 'Membaca Word...'}
+            </>
+          ) : (
+            <>
+              <ActionIcon name="preview" />
+              {importMode === 'excel' ? 'Preview Excel' : 'Preview Word'}
+            </>
+          )}
         </button>
 
         <button
@@ -3270,6 +3524,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
           onClick={closeImportWord}
           disabled={importLoading || importSaving}
         >
+          <ActionIcon name="cancel" />
           Tutup
         </button>
       </div>
@@ -3433,6 +3688,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               color: importTab === 'document' ? '#2563EB' : '#475569'
             }}
           >
+            <ActionIcon name="page" size={14} />
             {importMode === 'excel' ? 'Ringkasan Excel' : 'Preview Dokumen Word'}
           </button>
 
@@ -3448,6 +3704,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               color: importTab === 'questions' ? '#2563EB' : '#475569'
             }}
           >
+            <ActionIcon name="preview" size={14} />
             Preview Soal ({importPreview.length})
           </button>
         </div>
@@ -3501,6 +3758,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                 </div>
               </div>
               <button type="button" className="btn btn-sm" onClick={() => setStudentPreviewIndex(null)}>
+                <ActionIcon name="cancel" size={14} />
                 Tutup
               </button>
             </div>
@@ -3525,7 +3783,11 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               lineHeight: 1.6
             }}
           >
-            <div><strong>Seluruh isi Word berhasil dibaca.</strong></div>
+            <div>
+              <strong>
+                {importMode === 'excel' ? 'Isi template Excel berhasil dibaca.' : 'Seluruh isi Word berhasil dibaca.'}
+              </strong>
+            </div>
             <div>
               {importMode === 'excel'
                 ? `Total soal dari sheet SOAL: ${parserInfo?.total_detected ?? importSummary?.total_soal_terdeteksi ?? 0}. Validasi Excel ditampilkan di laporan kualitas import.`
@@ -3539,6 +3801,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               className="btn btn-sm"
               onClick={() => copyImportText(importDocument.raw_text, 'Teks dokumen')}
             >
+              <ActionIcon name="page" size={14} />
               {importMode === 'excel' ? 'Salin Ringkasan Excel' : 'Salin Teks Dokumen'}
             </button>
 
@@ -3547,7 +3810,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               className="btn btn-primary btn-sm"
               onClick={addManualImportSoal}
             >
-              + Tambah Soal Manual
+              <ActionIcon name="add" size={14} />
+              Tambah Soal Manual
             </button>
           </div>
 
@@ -3576,7 +3840,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
           <div style={{ color: '#64748B', fontSize: 12 }}>
             {importMode === 'excel'
-              ? 'Preview Excel langsung masuk ke editor soal lama. Perbaiki error validasi sebelum tahap save Excel dibuat.'
+              ? 'Preview Excel langsung masuk ke editor soal. Perbaiki error validasi sebelum menyimpan ke database.'
               : 'Blok teks dari dokumen ini bisa disalin lalu dimasukkan ke soal manual.'}
           </div>
         </div>
@@ -3595,7 +3859,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
         >
           <div style={{ marginBottom: 10 }}>Belum ada soal terdeteksi otomatis.</div>
           <button type="button" className="btn btn-primary btn-sm" onClick={addManualImportSoal}>
-            + Tambah Soal Manual
+            <ActionIcon name="add" size={14} />
+            Tambah Soal Manual
           </button>
         </div>
       )}
@@ -3614,13 +3879,14 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
             }}
           >
             {importMode === 'excel'
-              ? 'Guru dapat mengecek dan mengedit hasil preview Excel. Tahap ini belum menyimpan soal Excel ke database.'
+              ? 'Guru dapat mengecek dan mengedit hasil preview Excel sebelum soal disimpan ke database.'
               : 'Guru dapat mengedit isi soal, pilihan jawaban, tipe soal, gambar, dan kunci sebelum soal disimpan ke database.'}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
             <button type="button" className="btn btn-primary btn-sm" onClick={addManualImportSoal}>
-              + Tambah Soal Manual
+              <ActionIcon name="add" size={14} />
+              Tambah Soal Manual
             </button>
           </div>
 
@@ -3628,6 +3894,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
             {importPreview.map((soal, index) => {
               const gambarList = Array.isArray(soal.gambar) ? soal.gambar : []
               const tabelList = normalizeSupportingTables(soal)
+              const mediaList = Array.isArray(soal.media) ? soal.media : []
               const parserNotesRaw = [
                 ...(Array.isArray(soal.parser_notes) ? soal.parser_notes : []),
                 ...(Array.isArray(soal.debug_extract?.warnings) ? soal.debug_extract.warnings : [])
@@ -3712,6 +3979,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                         className="btn btn-sm"
                         onClick={() => setStudentPreviewIndex(index)}
                       >
+                        <ActionIcon name="preview" size={14} />
                         Preview Tampilan Siswa
                       </button>
                     </div>
@@ -3743,6 +4011,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                         onClick={() => scrollToManualSupport(index)}
                         style={{ marginTop: 8, background: '#FDE68A', color: '#92400E' }}
                       >
+                        <ActionIcon name="edit" size={14} />
                         Lengkapi Manual
                       </button>
                     </div>
@@ -3802,8 +4071,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             disabled={blockIndex === 0}
                             title="Naikkan blok"
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          >
-                            <ArrowUp size={14} /> Naik
+                            >
+                              <ArrowUp size={14} /> Naik
                           </button>
                           <button
                             type="button"
@@ -3812,8 +4081,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             disabled={blockIndex === layoutBlocks.length - 1}
                             title="Turunkan blok"
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          >
-                            <ArrowDown size={14} /> Turun
+                            >
+                              <ArrowDown size={14} /> Turun
                           </button>
                         </div>
                       ))}
@@ -3837,7 +4106,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <label className="btn btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                          + Tambah Gambar
+                          <ActionIcon name="upload" size={14} />
+                          Tambah Gambar
                           <input
                             type="file"
                             accept="image/*"
@@ -3851,7 +4121,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                         </label>
 
                         <button type="button" className="btn btn-sm" onClick={() => addSupportingTableImport(index)}>
-                          + Tambah Tabel
+                          <ActionIcon name="add" size={14} />
+                          Tambah Tabel
                         </button>
 
                         <button
@@ -3859,7 +4130,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                           className="btn btn-sm"
                           onClick={() => updateImportSoal(index, 'stimulus_tambahan', soal.stimulus_tambahan ? soal.stimulus_tambahan : ' ')}
                         >
-                          + Tambah Teks Stimulus
+                          <ActionIcon name="add" size={14} />
+                          Tambah Teks Stimulus
                         </button>
                       </div>
                     </div>
@@ -3986,6 +4258,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                 className="btn btn-sm"
                                 onClick={() => window.open(toAssetUrl(g.src), '_blank')}
                               >
+                                <ActionIcon name="preview" size={14} />
                                 Perbesar
                               </button>
 
@@ -3995,6 +4268,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                 onClick={() => removeGambarImport(index, gIndex)}
                                 style={{ background: '#FEE2E2', color: '#991B1B' }}
                               >
+                                <ActionIcon name="delete" size={14} />
                                 Hapus
                               </button>
                             </div>
@@ -4021,14 +4295,16 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                                 <div style={{ fontSize: 12, color: '#475569' }}>
-                                  Tabel {tableIndex + 1} {table.source === 'manual' ? '(manual)' : '(hasil Word)'}
+                                  Tabel {tableIndex + 1} {table.source === 'manual' ? '(manual)' : table.source === 'excel' ? '(hasil Excel)' : '(hasil Word)'}
                                 </div>
                                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                   <button type="button" className="btn btn-sm" onClick={() => addSupportingTableRow(index, tableIndex)}>
-                                    + Tambah Baris
+                                    <ActionIcon name="add" size={14} />
+                                    Tambah Baris
                                   </button>
                                   <button type="button" className="btn btn-sm" onClick={() => addSupportingTableColumn(index, tableIndex)}>
-                                    + Tambah Kolom
+                                    <ActionIcon name="add" size={14} />
+                                    Tambah Kolom
                                   </button>
                                   <button
                                     type="button"
@@ -4036,6 +4312,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                     onClick={() => removeSupportingTableImport(index, tableIndex)}
                                     style={{ background: '#FEE2E2', color: '#991B1B' }}
                                   >
+                                    <ActionIcon name="delete" size={14} />
                                     Hapus Tabel
                                   </button>
                                 </div>
@@ -4115,7 +4392,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                             onClick={() => removeSupportingTableRow(index, tableIndex, rowIndex)}
                                             style={{ background: '#FEE2E2', color: '#991B1B' }}
                                           >
-                                            -
+                                            <ActionIcon name="delete" size={14} />
                                           </button>
                                         </td>
                                       </tr>
@@ -4129,6 +4406,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                             onClick={() => removeSupportingTableColumn(index, tableIndex, cellIndex)}
                                             style={{ background: '#FEE2E2', color: '#991B1B' }}
                                           >
+                                            <ActionIcon name="delete" size={14} />
                                             Hapus Kolom
                                           </button>
                                         </td>
@@ -4141,6 +4419,47 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             </div>
                           )
                         })}
+                      </div>
+                    )}
+
+                    {mediaList.length > 0 && (
+                      <div
+                        style={{
+                          display: 'grid',
+                          gap: 8,
+                          marginTop: 12,
+                          padding: 10,
+                          border: '1px solid #CBD5E1',
+                          borderRadius: 10,
+                          background: '#FFFFFF'
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#475569' }}>
+                          Metadata Media dari Excel
+                        </div>
+
+                        {mediaList.map((media, mediaIndex) => (
+                          <div
+                            key={mediaIndex}
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: '120px 1fr',
+                              gap: 8,
+                              padding: 8,
+                              borderRadius: 8,
+                              background: '#F8FAFC',
+                              fontSize: 12
+                            }}
+                          >
+                            <strong>Media {mediaIndex + 1}</strong>
+                            <div style={{ display: 'grid', gap: 4 }}>
+                              <div><strong>File:</strong> {media.nama_file || '-'}</div>
+                              <div><strong>Caption:</strong> {media.caption || '-'}</div>
+                              <div><strong>Sumber:</strong> {media.sumber || '-'}</div>
+                              <div><strong>Keterangan:</strong> {media.keterangan || '-'}</div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -4176,6 +4495,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                               color: label === 'E' ? '#991B1B' : '#475569'
                             }}
                           >
+                            <ActionIcon name={label === 'E' ? 'delete' : 'reset'} size={14} />
                             {label === 'E' ? 'Hapus' : 'Kosongkan'}
                           </button>
                         </div>
@@ -4188,7 +4508,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                           onClick={() => addChoiceImport(index)}
                           style={{ justifySelf: 'start' }}
                         >
-                          + Tambah Pilihan E
+                          <ActionIcon name="add" size={14} />
+                          Tambah Pilihan E
                         </button>
                       )}
 
@@ -4280,6 +4601,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                               color: label === 'E' ? '#991B1B' : '#475569'
                             }}
                           >
+                            <ActionIcon name={label === 'E' ? 'delete' : 'reset'} size={14} />
                             {label === 'E' ? 'Hapus' : 'Kosongkan'}
                           </button>
                         </div>
@@ -4292,7 +4614,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                           onClick={() => addChoiceImport(index)}
                           style={{ justifySelf: 'start' }}
                         >
-                          + Tambah Pilihan E
+                          <ActionIcon name="add" size={14} />
+                          Tambah Pilihan E
                         </button>
                       )}
                     </div>
@@ -4310,7 +4633,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                           className="btn btn-sm"
                           onClick={() => addBenarSalahItem(index)}
                         >
-                          + Tambah Pernyataan
+                          <ActionIcon name="add" size={14} />
+                          Tambah Pernyataan
                         </button>
                       </div>
 
@@ -4359,6 +4683,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             onClick={() => removeBenarSalahItem(index, pIndex)}
                             style={{ background: '#FEE2E2', color: '#991B1B' }}
                           >
+                            <ActionIcon name="delete" size={14} />
                             Hapus
                           </button>
                         </div>
@@ -4379,14 +4704,16 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             className="btn btn-sm"
                             onClick={() => addMenjodohkanKiri(index)}
                           >
-                            + Tambah Item Kiri
+                            <ActionIcon name="add" size={14} />
+                            Tambah Item Kiri
                           </button>
                           <button
                             type="button"
                             className="btn btn-sm"
                             onClick={() => addMenjodohkanKanan(index)}
                           >
-                            + Tambah Pilihan Kanan
+                            <ActionIcon name="add" size={14} />
+                            Tambah Pilihan Kanan
                           </button>
                         </div>
                       </div>
@@ -4427,6 +4754,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                 onClick={() => removeMenjodohkanKiri(index, kiriIndex)}
                                 style={{ background: '#FEE2E2', color: '#991B1B' }}
                               >
+                                <ActionIcon name="delete" size={14} />
                                 Hapus
                               </button>
                             </div>
@@ -4462,6 +4790,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                                 onClick={() => removeMenjodohkanKanan(index, kananIndex)}
                                 style={{ background: '#FEE2E2', color: '#991B1B' }}
                               >
+                                <ActionIcon name="delete" size={14} />
                                 Hapus
                               </button>
                             </div>
@@ -4528,6 +4857,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               onClick={closeImportWord}
               disabled={importSaving}
             >
+              <ActionIcon name="cancel" />
               Batal
             </button>
 
@@ -4536,18 +4866,27 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               onClick={addManualImportSoal}
               disabled={importSaving}
             >
-              + Tambah Soal Manual
+              <ActionIcon name="add" />
+              Tambah Soal Manual
             </button>
 
             <button
               className="btn btn-primary"
-              onClick={handleSaveImportWord}
-              disabled={importSaving || importMode === 'excel'}
-              title={importMode === 'excel' ? 'Save Import Excel akan ditambahkan pada tahap berikutnya.' : ''}
+              onClick={importMode === 'excel' ? handleSaveImportExcel : handleSaveImportWord}
+              disabled={importSaving}
+              title={importMode === 'excel' ? 'Simpan hasil preview Excel ke database.' : ''}
             >
-              {importMode === 'excel'
-                ? 'Save Excel belum aktif'
-                : (importSaving ? 'Menyimpan soal...' : `Simpan ${importPreview.length} Soal`)}
+              {importSaving ? (
+                <>
+                  <span className="spinner" />
+                  {importMode === 'excel' ? 'Menyimpan Excel...' : 'Menyimpan soal...'}
+                </>
+              ) : (
+                <>
+                  <ActionIcon name="save" />
+                  {importMode === 'excel' ? `Simpan ${importPreview.length} Soal Excel` : `Simpan ${importPreview.length} Soal`}
+                </>
+              )}
             </button>
           </div>
         </>
@@ -4566,7 +4905,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
         {canEdit && (
           <button className="btn btn-primary instrumen-primary-action" onClick={openAdd}>
-            <FilePlus2 size={16} />
+            <ActionIcon name="add" />
             Tambah instrumen
           </button>
         )}
@@ -4608,7 +4947,10 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          <button type="submit" className="btn btn-primary btn-sm">Cari</button>
+          <button type="submit" className="btn btn-primary btn-sm">
+            <ActionIcon name="search" size={14} />
+            Cari
+          </button>
         </form>
 
         <div className="instrumen-filter-wrap">
@@ -4719,7 +5061,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     {/* SISWA */}
                     {user?.peran === 'siswa' && (
                       <button className="btn btn-primary btn-sm" onClick={() => navigate(`/kerjakan/${item.id}`)}>
-                        <PlayCircle size={14} />
+                        <ActionIcon name="start" size={14} />
                         Kerjakan
                       </button>
                     )}
@@ -4728,34 +5070,41 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     {user?.peran === 'guru' && (
                       <>
                         <button className="btn btn-sm" onClick={() => navigate(`/soal/${item.id}`)}>
-                          <BookOpenCheck size={14} />
+                          <ActionIcon name="page" size={14} />
                           Kelola Soal
                         </button>
                         <button className="btn btn-primary btn-sm" onClick={() => openImportWord(item)}>
-                          <Upload size={14} />
+                          <ActionIcon name="import" size={14} />
                           Import Word
                         </button>
                         <button
                           className="btn btn-sm"
                           onClick={() => openImportExcel(item)}
-                          disabled
-                          title="Import Excel masih tahap eksperimen. Gunakan Import Word untuk saat ini."
+                          title="Preview soal dari template Excel SMIASB"
                         >
-                          <Upload size={14} />
-                          Import Excel (Eksperimen)
+                          <ActionIcon name="import" size={14} />
+                          Import Excel
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={handleDownloadImportExcelTemplate}
+                          title="Unduh template Excel resmi SMIASB"
+                        >
+                          <ActionIcon name="download" size={14} />
+                          Template Excel
                         </button>
                         <span style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
-                          Import Excel masih tahap eksperimen. Gunakan Import Word untuk saat ini.
+                          Preview dan save Excel aktif.
                         </span>
                         {canDuplicateItem(item) && (
                           <button className="btn btn-sm" onClick={() => openDuplicateInstrument(item)}>
-                            <CopyPlus size={14} />
+                            <ActionIcon name="use" size={14} />
                             Gunakan untuk Kelas Lain
                           </button>
                         )}
                         {/* TAMBAHAN: TOMBOL EDIT WAKTU UNTUK GURU */}
                         <button className="btn btn-amber btn-sm" onClick={() => openEditBatasWaktu(item)}>
-                          <Clock3 size={14} />
+                          <ActionIcon name="edit" size={14} />
                           Edit Waktu
                         </button>
                       </>
@@ -4765,42 +5114,49 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     {isAdminRole(user?.peran) && (
                       <>
                         <button className="btn btn-sm" onClick={() => navigate(`/soal/${item.id}`)}>
-                          <BookOpenCheck size={14} />
+                          <ActionIcon name="page" size={14} />
                           Kelola Soal
                         </button>
                         <button className="btn btn-primary btn-sm" onClick={() => openImportWord(item)}>
-                          <Upload size={14} />
+                          <ActionIcon name="import" size={14} />
                           Import Word
                         </button>
                         <button
                           className="btn btn-sm"
                           onClick={() => openImportExcel(item)}
-                          disabled
-                          title="Import Excel masih tahap eksperimen. Gunakan Import Word untuk saat ini."
+                          title="Preview soal dari template Excel SMIASB"
                         >
-                          <Upload size={14} />
-                          Import Excel (Eksperimen)
+                          <ActionIcon name="import" size={14} />
+                          Import Excel
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={handleDownloadImportExcelTemplate}
+                          title="Unduh template Excel resmi SMIASB"
+                        >
+                          <ActionIcon name="download" size={14} />
+                          Template Excel
                         </button>
                         <span style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
-                          Import Excel masih tahap eksperimen. Gunakan Import Word untuk saat ini.
+                          Preview dan save Excel aktif.
                         </span>
                         {canDuplicateItem(item) && (
                           <button className="btn btn-sm" onClick={() => openDuplicateInstrument(item)}>
-                            <CopyPlus size={14} />
+                            <ActionIcon name="use" size={14} />
                             Gunakan untuk Kelas Lain
                           </button>
                         )}
                         <button className="btn btn-sm" onClick={() => openEdit(item)}>
-                          <Pencil size={14} />
+                          <ActionIcon name="edit" size={14} />
                           Edit
                         </button>
                         {/* TAMBAHAN: TOMBOL EDIT WAKTU UNTUK ADMIN */}
                         <button className="btn btn-amber btn-sm" onClick={() => openEditBatasWaktu(item)}>
-                          <Clock3 size={14} />
+                          <ActionIcon name="edit" size={14} />
                           Edit Waktu
                         </button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>
-                          <Trash2 size={14} />
+                          <ActionIcon name="delete" size={14} />
                           Hapus
                         </button>
                       </>

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { authAPI } from '../api'
 import { KELAS } from '../constants/classes'
 import { useAuth } from '../context/AuthContext'
+import ActionIcon from '../components/ActionIcon'
 
 export default function RegisterPage() {
   const { login } = useAuth()
@@ -140,7 +141,17 @@ export default function RegisterPage() {
             disabled={loading}
             style={{ width: '100%', justifyContent: 'center', padding: '10px', marginTop: 4 }}
           >
-            {loading ? <span className="spinner" /> : 'Daftar sekarang'}
+            {loading ? (
+              <>
+                <span className="spinner" />
+                Memproses...
+              </>
+            ) : (
+              <>
+                <ActionIcon name="add" />
+                Daftar sekarang
+              </>
+            )}
           </button>
         </form>
 

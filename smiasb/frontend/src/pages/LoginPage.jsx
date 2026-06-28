@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authAPI } from '../api'
 import { useAuth } from '../context/AuthContext'
+import ActionIcon from '../components/ActionIcon'
 
 const getRedirectPath = (peran) => {
   const role = peran === 'admin' ? 'admin_sekolah' : peran
@@ -441,6 +442,9 @@ export default function LoginPage() {
           cursor: pointer;
           font-size: 18px;
           line-height: 1;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
         }
         .iap-modal-alert {
           border-radius: 10px;
@@ -475,6 +479,10 @@ export default function LoginPage() {
           font-size: 13px;
           font-weight: 700;
           cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
         }
         .iap-primary-btn {
           height: 40px;
@@ -486,6 +494,10 @@ export default function LoginPage() {
           font-size: 13px;
           font-weight: 800;
           cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
         }
         .iap-primary-btn:disabled,
         .iap-secondary-btn:disabled {
@@ -580,7 +592,7 @@ export default function LoginPage() {
                 </p>
               </div>
               <button className="iap-modal-close" type="button" onClick={closeForgotPassword} disabled={forgotLoading} aria-label="Tutup">
-                x
+                <ActionIcon name="cancel" size={16} />
               </button>
             </div>
 
@@ -613,10 +625,21 @@ export default function LoginPage() {
 
                 <div className="iap-modal-actions">
                   <button className="iap-secondary-btn" type="button" onClick={closeForgotPassword} disabled={forgotLoading}>
+                    <ActionIcon name="cancel" size={14} />
                     Batal
                   </button>
                   <button className="iap-primary-btn" type="submit" disabled={forgotLoading}>
-                    {forgotLoading ? 'Memproses...' : 'Lanjutkan'}
+                    {forgotLoading ? (
+                      <>
+                        <span className="iap-spinner" />
+                        Memproses...
+                      </>
+                    ) : (
+                      <>
+                        <ActionIcon name="next" size={14} />
+                        Lanjutkan
+                      </>
+                    )}
                   </button>
                 </div>
               </form>
@@ -691,10 +714,21 @@ export default function LoginPage() {
 
                 <div className="iap-modal-actions">
                   <button className="iap-secondary-btn" type="button" onClick={() => setForgotStep('request')} disabled={forgotLoading}>
+                    <ActionIcon name="back" size={14} />
                     Kembali
                   </button>
                   <button className="iap-primary-btn" type="submit" disabled={forgotLoading}>
-                    {forgotLoading ? 'Menyimpan...' : 'Ubah password'}
+                    {forgotLoading ? (
+                      <>
+                        <span className="iap-spinner" />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      <>
+                        <ActionIcon name="key" size={14} />
+                        Ubah password
+                      </>
+                    )}
                   </button>
                 </div>
               </form>
@@ -703,6 +737,7 @@ export default function LoginPage() {
             {forgotStep === 'done' && (
               <div className="iap-modal-actions">
                 <button className="iap-primary-btn" type="button" onClick={closeForgotPassword}>
+                  <ActionIcon name="check" size={14} />
                   Tutup
                 </button>
               </div>
@@ -803,16 +838,9 @@ export default function LoginPage() {
                   aria-label={showPassword ? 'Sembunyikan' : 'Tampilkan'}
                 >
                   {showPassword ? (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
+                    <ActionIcon name="cancel" size={16} />
                   ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
+                    <ActionIcon name="preview" size={16} />
                   )}
                 </button>
               </div>
@@ -821,6 +849,7 @@ export default function LoginPage() {
             {/* Lupa password */}
             <div className="iap-footer">
               <button className="iap-forgot" type="button" onClick={openForgotPassword}>
+                <ActionIcon name="key" size={14} />
                 Lupa password?
               </button>
             </div>
@@ -842,7 +871,17 @@ export default function LoginPage() {
                 letterSpacing: '0.02em',
               }}
             >
-              {loading ? <span className="iap-spinner" /> : 'Masuk'}
+              {loading ? (
+                <>
+                  <span className="iap-spinner" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <ActionIcon name="send" />
+                  Masuk
+                </>
+              )}
             </button>
 
             {googleClientId && (

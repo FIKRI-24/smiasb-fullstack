@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 const JENIS = ['Literasi', 'Numerasi', 'HOTS']
 const STATUS = ['draft', 'aktif', 'nonaktif']
@@ -257,7 +258,10 @@ export default function SuperAdminInstrumenPage() {
                   onChange={event => setSearch(event.target.value)}
                   onKeyDown={event => event.key === 'Enter' && handleSearch()}
                 />
-                <button className="btn" onClick={handleSearch}>Cari</button>
+                <button className="btn" onClick={handleSearch}>
+                  <ActionIcon name="search" />
+                  Cari
+                </button>
               </div>
             </div>
           </div>
@@ -313,8 +317,14 @@ export default function SuperAdminInstrumenPage() {
                     <td>{formatPercent(instrument.ketuntasan)}</td>
                     <td>
                       <div className="school-actions instrument-actions">
-                        <button className="btn btn-sm" onClick={() => openDetail(instrument)}>Detail</button>
-                        <button className="btn btn-sm" onClick={() => goToMonitoring(instrument)}>Lihat Monitoring</button>
+                        <button className="btn btn-sm" onClick={() => openDetail(instrument)}>
+                          <ActionIcon name="detail" size={14} />
+                          Detail
+                        </button>
+                        <button className="btn btn-sm" onClick={() => goToMonitoring(instrument)}>
+                          <ActionIcon name="preview" size={14} />
+                          Lihat Monitoring
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -406,8 +416,14 @@ function InstrumentDetailModal({ instrument, loading, error, onClose, onOpenMoni
         </div>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onClose}>Tutup</button>
-          <button className="btn btn-primary" onClick={() => onOpenMonitoring(instrument)}>Lihat Monitoring</button>
+          <button className="btn" onClick={onClose}>
+            <ActionIcon name="cancel" />
+            Tutup
+          </button>
+          <button className="btn btn-primary" onClick={() => onOpenMonitoring(instrument)}>
+            <ActionIcon name="preview" />
+            Lihat Monitoring
+          </button>
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@ import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
 import { confirmToast } from '../utils/notify'
+import ActionIcon from '../components/ActionIcon'
 
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
 const ANSWER_DRAFT_PREFIX = 'smiasb_answer_draft'
@@ -1126,7 +1127,10 @@ export default function KerjakanSoalPage() {
           <div style={{ background: '#ECFDF5', padding: 16, borderRadius: 12, margin: 16 }}>
             <div style={{ fontSize: 36, fontWeight: 700, color: '#10B981' }}>{nilaiLama}</div>
           </div>
-          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>Kembali</button>
+          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>
+            <ActionIcon name="back" />
+            Kembali
+          </button>
         </div>
       </div>
     )
@@ -1140,7 +1144,10 @@ export default function KerjakanSoalPage() {
           <h2>Waktu Habis!</h2>
           <p>Batas waktu pengerjaan instrumen ini sudah berakhir.</p>
           <p style={{ color: '#666', marginTop: 8 }}>Anda tidak dapat mengerjakan instrumen ini lagi.</p>
-          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>Kembali</button>
+          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>
+            <ActionIcon name="back" />
+            Kembali
+          </button>
         </div>
       </div>
     )
@@ -1154,7 +1161,10 @@ export default function KerjakanSoalPage() {
           <h2>Ujian Selesai!</h2>
           <div style={{ fontSize: 48, fontWeight: 700, margin: 20 }}>{hasil.nilai}</div>
           <p>Benar: {hasil.total_benar} dari {hasil.total_soal} butir penilaian</p>
-          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>Kembali</button>
+          <button className="btn btn-primary" onClick={() => navigate('/instrumen')}>
+            <ActionIcon name="back" />
+            Kembali
+          </button>
         </div>
       </div>
     )
@@ -1409,7 +1419,22 @@ export default function KerjakanSoalPage() {
         <span>{sudahDijawab === soal.length ? 'Semua soal sudah dijawab' : `${soal.length - sudahDijawab} soal belum dijawab`}</span>
         <button className="btn btn-primary" onClick={() => handleSubmit(false)} disabled={submitting || waktuHabis}
           style={{ background: (submitting || waktuHabis) ? '#9CA3AF' : '#3B82F6' }}>
-          {submitting ? 'Mengirim...' : waktuHabis ? 'Waktu Habis' : 'Kumpulkan Jawaban'}
+          {submitting ? (
+            <>
+              <span className="spinner" />
+              Mengirim...
+            </>
+          ) : waktuHabis ? (
+            <>
+              <ActionIcon name="cancel" />
+              Waktu Habis
+            </>
+          ) : (
+            <>
+              <ActionIcon name="send" />
+              Kumpulkan Jawaban
+            </>
+          )}
         </button>
       </div>
 
@@ -1422,10 +1447,20 @@ export default function KerjakanSoalPage() {
                 <span>{Math.round(imageZoom * 100)}%</span>
               </div>
               <div>
-                <button type="button" onClick={zoomImageOut} disabled={imageZoom <= 0.5}>-</button>
-                <button type="button" onClick={resetImageZoom}>Reset</button>
-                <button type="button" onClick={zoomImageIn} disabled={imageZoom >= 3}>+</button>
-                <button type="button" className="image-zoom-close" onClick={closeImageZoom}>Tutup</button>
+                <button type="button" onClick={zoomImageOut} disabled={imageZoom <= 0.5}>
+                  <ActionIcon name="previous" size={14} />
+                </button>
+                <button type="button" onClick={resetImageZoom}>
+                  <ActionIcon name="reset" size={14} />
+                  Reset
+                </button>
+                <button type="button" onClick={zoomImageIn} disabled={imageZoom >= 3}>
+                  <ActionIcon name="next" size={14} />
+                </button>
+                <button type="button" className="image-zoom-close" onClick={closeImageZoom}>
+                  <ActionIcon name="cancel" size={14} />
+                  Tutup
+                </button>
               </div>
             </div>
             <div className="image-zoom-preview">

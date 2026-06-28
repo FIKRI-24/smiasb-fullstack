@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { sekolahAPI, superAdminAPI } from '../api'
+import ActionIcon from '../components/ActionIcon'
 
 const JENIS = ['Literasi', 'Numerasi', 'HOTS']
 const STATUS = ['draft', 'aktif', 'nonaktif']
@@ -248,7 +249,10 @@ export default function SuperAdminMonitoringPage() {
                   onChange={event => setSearch(event.target.value)}
                   onKeyDown={event => event.key === 'Enter' && handleSearch()}
                 />
-                <button className="btn" onClick={handleSearch}>Cari</button>
+                <button className="btn" onClick={handleSearch}>
+                  <ActionIcon name="search" />
+                  Cari
+                </button>
               </div>
             </div>
           </div>
@@ -308,8 +312,14 @@ export default function SuperAdminMonitoringPage() {
                     <td>{formatPercent(item.ketuntasan)}</td>
                     <td>
                       <div className="school-actions monitoring-actions">
-                        <button className="btn btn-sm" onClick={() => openDetail(item)}>Detail Monitoring</button>
-                        <button className="btn btn-sm" onClick={() => openBelumMengerjakan(item)}>Lihat Belum Mengerjakan</button>
+                        <button className="btn btn-sm" onClick={() => openDetail(item)}>
+                          <ActionIcon name="detail" size={14} />
+                          Detail Monitoring
+                        </button>
+                        <button className="btn btn-sm" onClick={() => openBelumMengerjakan(item)}>
+                          <ActionIcon name="preview" size={14} />
+                          Lihat Belum Mengerjakan
+                        </button>
                       </div>
                     </td>
                   </tr>
