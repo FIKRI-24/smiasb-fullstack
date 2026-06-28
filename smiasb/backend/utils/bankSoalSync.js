@@ -1,7 +1,28 @@
 const crypto = require('crypto');
-const { pool } = require('../config/database');
+const { pool, isPostgres, dbPlaceholder, dbPlaceholders } = require('../config/database');
 
 const LAYOUT_METADATA_KEYS = new Set(['layout_blocks']);
+
+const INSERT_BANK_SOAL_SQL = `INSERT INTO bank_soal
+  (id_sekolah, source_instrumen_id, source_soal_id, kelas, mata_pelajaran, jenis_instrumen,
+   materi, topik, question_hash, pertanyaan, stimulus_tambahan, layout_blocks,
+   supporting_tables, media, gambar_soal, tabel_data, pilihan_a, pilihan_b, pilihan_c,
+   pilihan_d, pilihan_e, jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen,
+   bobot, pasangan_menjodohkan, pernyataan_checklist, created_by, usage_count, is_aktif)
+ VALUES (${dbPlaceholders(31).join(', ')})
+ ${isPostgres
+    ? 'ON CONFLICT (id_sekolah, question_hash) DO NOTHING RETURNING id'
+    : 'ON DUPLICATE KEY UPDATE updated_at = updated_at'}`;
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
+
+function resultRowCount(result) {
+  return isPostgres
+    ? result.rowCount
+    : result.rowCount ?? result[0]?.affectedRows ?? result.affectedRows ?? 0;
+}
 
 function safeJsonParse(value, fallback = null) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -115,10 +136,11 @@ function createQuestionHash(soal, metadata = {}) {
 
 async function syncInstrumenToBankSoal(instrumenId, options = {}) {
   const executor = options.conn || pool;
-  const [instrumenRows] = await executor.execute(
-    'SELECT * FROM instrumen WHERE id = ?',
+  const instrumenResult = await executor.execute(
+    `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
     [instrumenId]
   );
+  const instrumenRows = resultRows(instrumenResult);
   const instrumen = instrumenRows[0];
 
   if (!instrumen) {
@@ -139,10 +161,11 @@ async function syncInstrumenToBankSoal(instrumenId, options = {}) {
     };
   }
 
-  const [soalRows] = await executor.execute(
-    'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC, id ASC',
+  const soalResult = await executor.execute(
+    `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC, id ASC`,
     [instrumenId]
   );
+  const soalRows = resultRows(soalResult);
 
   let added = 0;
   let skipped = 0;
@@ -155,16 +178,8 @@ async function syncInstrumenToBankSoal(instrumenId, options = {}) {
     };
     const questionHash = createQuestionHash(soal, metadata);
 
-    const [result] = await executor.execute(
-      `INSERT INTO bank_soal
-        (id_sekolah, source_instrumen_id, source_soal_id, kelas, mata_pelajaran, jenis_instrumen,
-         materi, topik, question_hash, pertanyaan, stimulus_tambahan, layout_blocks,
-         supporting_tables, media, gambar_soal, tabel_data, pilihan_a, pilihan_b, pilihan_c,
-         pilihan_d, pilihan_e, jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen,
-         bobot, pasangan_menjodohkan, pernyataan_checklist, created_by, usage_count, is_aktif)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
-       ON DUPLICATE KEY UPDATE
-         updated_at = updated_at`,
+    const result = await executor.execute(
+      INSERT_BANK_SOAL_SQL,
       [
         instrumen.id_sekolah,
         instrumen.id,
@@ -194,11 +209,13 @@ async function syncInstrumenToBankSoal(instrumenId, options = {}) {
         Number(soal.bobot || 1),
         soal.pasangan_menjodohkan || null,
         soal.pernyataan_checklist || null,
-        instrumen.dibuat_oleh || null
+        instrumen.dibuat_oleh || null,
+        0,
+        isPostgres ? true : 1
       ]
     );
 
-    if (result.affectedRows === 1) added += 1;
+    if (resultRowCount(result) === 1) added += 1;
     else skipped += 1;
   }
 

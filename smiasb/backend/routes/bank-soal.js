@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { pool } = require('../config/database');
+const { pool, isPostgres, dbPlaceholder, dbPlaceholders, addParam } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const {
   appendSekolahScope,
@@ -10,6 +10,62 @@ const {
   isSuperAdmin,
   normalizeKelas
 } = require('../utils/accessControl');
+
+const LIKE_OPERATOR = isPostgres ? 'ILIKE' : 'LIKE';
+const COUNT_TOTAL_SQL = isPostgres ? 'COUNT(*)::int' : 'COUNT(*)';
+const ACTIVE_SQL = isPostgres ? 'TRUE' : '1';
+const INACTIVE_SQL = isPostgres ? 'FALSE' : '0';
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
+
+function resultInsertId(result) {
+  return isPostgres ? result.rows[0]?.id : result.insertId ?? result[0]?.insertId;
+}
+
+function resultRowCount(result) {
+  return isPostgres
+    ? result.rowCount
+    : result.rowCount ?? result[0]?.affectedRows ?? result.affectedRows ?? 0;
+}
+
+async function getRouteConnection() {
+  if (!isPostgres) {
+    return pool.getConnection();
+  }
+
+  const client = await pool.connect();
+  return {
+    execute(sql, params) {
+      return client.query(sql, params);
+    },
+    beginTransaction() {
+      return client.query('BEGIN');
+    },
+    commit() {
+      return client.query('COMMIT');
+    },
+    rollback() {
+      return client.query('ROLLBACK');
+    },
+    release() {
+      client.release();
+    }
+  };
+}
+
+function buildOrderByIdList(ids, params, column = 'id') {
+  if (isPostgres) {
+    const cases = ids
+      .map((id, index) => `WHEN ${addParam(params, id)} THEN ${index}`)
+      .join(' ');
+    return `CASE ${column} ${cases} ELSE ${ids.length} END`;
+  }
+
+  const placeholders = ids.map(id => addParam(params, id)).join(', ');
+  return `FIELD(${column}, ${placeholders})`;
+}
 
 function getPagination(query = {}) {
   const parsedPage = Number.parseInt(query.page, 10);
@@ -26,7 +82,7 @@ function getPagination(query = {}) {
 }
 
 function buildBankSoalWhere(query, user) {
-  const where = ['bs.is_aktif = 1'];
+  const where = [`bs.is_aktif = ${ACTIVE_SQL}`];
   const params = [];
   const scope = appendSekolahScope(where, params, user, 'bs.id_sekolah', query.id_sekolah);
 
@@ -35,42 +91,36 @@ function buildBankSoalWhere(query, user) {
   }
 
   if (query.kelas) {
-    where.push(`${normalizeKelasSqlExpression('bs.kelas')} = ?`);
-    params.push(normalizeKelasForCompare(query.kelas));
+    where.push(`${normalizeKelasSqlExpression('bs.kelas')} = ${addParam(params, normalizeKelasForCompare(query.kelas))}`);
   }
 
   if (query.mata_pelajaran) {
-    where.push('bs.mata_pelajaran LIKE ?');
-    params.push(`%${query.mata_pelajaran}%`);
+    where.push(`bs.mata_pelajaran ${LIKE_OPERATOR} ${addParam(params, `%${query.mata_pelajaran}%`)}`);
   }
 
   if (query.jenis_instrumen) {
-    where.push('bs.jenis_instrumen = ?');
-    params.push(query.jenis_instrumen);
+    where.push(`bs.jenis_instrumen = ${addParam(params, query.jenis_instrumen)}`);
   }
 
   if (query.tipe_soal) {
-    where.push('bs.tipe_soal = ?');
-    params.push(query.tipe_soal);
+    where.push(`bs.tipe_soal = ${addParam(params, query.tipe_soal)}`);
   }
 
   if (query.materi) {
-    where.push('(bs.materi LIKE ? OR bs.topik LIKE ?)');
-    params.push(`%${query.materi}%`, `%${query.materi}%`);
+    const materi = `%${query.materi}%`;
+    where.push(`(bs.materi ${LIKE_OPERATOR} ${addParam(params, materi)} OR bs.topik ${LIKE_OPERATOR} ${addParam(params, materi)})`);
   }
 
   if (query.search) {
     where.push(`(
-      bs.pertanyaan LIKE ? OR
-      bs.stimulus_tambahan LIKE ? OR
-      bs.pilihan_a LIKE ? OR
-      bs.pilihan_b LIKE ? OR
-      bs.pilihan_c LIKE ? OR
-      bs.pilihan_d LIKE ? OR
-      bs.pilihan_e LIKE ?
+      bs.pertanyaan ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.stimulus_tambahan ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.pilihan_a ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.pilihan_b ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.pilihan_c ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.pilihan_d ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)} OR
+      bs.pilihan_e ${LIKE_OPERATOR} ${addParam(params, `%${query.search}%`)}
     )`);
-    const keyword = `%${query.search}%`;
-    params.push(keyword, keyword, keyword, keyword, keyword, keyword, keyword);
   }
 
   return { ok: true, where, params };
@@ -291,7 +341,7 @@ router.get(
       if (!filter.ok) return denyAccess(res);
 
       const whereSql = getWhereSql(filter.where);
-      const [rows] = await pool.query(
+      const rowsResult = await pool.query(
         `SELECT
           bs.id,
           bs.id_sekolah,
@@ -318,13 +368,16 @@ router.get(
          LIMIT ${limit} OFFSET ${offset}`,
         filter.params
       );
+      const rows = resultRows(rowsResult);
 
-      const [totalRows] = await pool.query(
-        `SELECT COUNT(*) AS total
+      const totalResult = await pool.query(
+        `SELECT ${COUNT_TOTAL_SQL} AS total
          FROM bank_soal bs
          ${whereSql}`,
         filter.params
       );
+      const totalRows = resultRows(totalResult);
+      const total = Number(totalRows[0]?.total || 0);
 
       return res.json({
         success: true,
@@ -332,8 +385,8 @@ router.get(
         meta: {
           page,
           limit,
-          total: totalRows[0]?.total || 0,
-          total_pages: Math.ceil((totalRows[0]?.total || 0) / limit),
+          total,
+          total_pages: Math.ceil(total / limit),
           is_super_admin: isSuperAdmin(req.user)
         }
       });
@@ -358,7 +411,7 @@ router.get(
       if (!filter.ok) return denyAccess(res);
 
       const whereSql = getWhereSql(filter.where);
-      const [rows] = await pool.execute(
+      const result = await pool.execute(
         `SELECT
           COUNT(*) AS total_soal,
           SUM(CASE WHEN bs.jenis_instrumen = 'Literasi' THEN 1 ELSE 0 END) AS total_literasi,
@@ -373,6 +426,7 @@ router.get(
          ${whereSql}`,
         filter.params
       );
+      const rows = resultRows(result);
 
       const data = rows[0] || {};
       Object.keys(data).forEach(key => {
@@ -414,7 +468,7 @@ router.post(
       });
     }
 
-    const conn = await pool.getConnection();
+    const conn = await getRouteConnection();
 
     try {
       await conn.beginTransaction();
@@ -428,10 +482,11 @@ router.post(
         });
       }
 
-      const [lockedInstrumenRows] = await conn.execute(
-        'SELECT * FROM instrumen WHERE id = ? FOR UPDATE',
+      const lockedInstrumenResult = await conn.execute(
+        `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)} FOR UPDATE`,
         [instrumenId]
       );
+      const lockedInstrumenRows = resultRows(lockedInstrumenResult);
       const instrumen = lockedInstrumenRows[0] || access.instrumen;
 
       if (instrumen.status === 'aktif') {
@@ -450,16 +505,20 @@ router.post(
         });
       }
 
-      const placeholders = bankSoalIds.map(() => '?').join(',');
-      const [bankRows] = await conn.execute(
+      const bankParams = [];
+      const bankPlaceholders = bankSoalIds.map(id => addParam(bankParams, id)).join(',');
+      const schoolPlaceholder = addParam(bankParams, instrumen.id_sekolah);
+      const orderByIdList = buildOrderByIdList(bankSoalIds, bankParams, 'id');
+      const bankResult = await conn.execute(
         `SELECT *
          FROM bank_soal
-         WHERE id IN (${placeholders})
-           AND is_aktif = 1
-           AND id_sekolah = ?
-         ORDER BY FIELD(id, ${placeholders})`,
-        [...bankSoalIds, instrumen.id_sekolah, ...bankSoalIds]
+         WHERE id IN (${bankPlaceholders})
+           AND is_aktif = ${ACTIVE_SQL}
+           AND id_sekolah = ${schoolPlaceholder}
+         ORDER BY ${orderByIdList}`,
+        bankParams
       );
+      const bankRows = resultRows(bankResult);
 
       const foundIds = new Set(bankRows.map(item => Number(item.id)));
       let skippedCount = bankSoalIds.filter(id => !foundIds.has(id)).length;
@@ -484,22 +543,24 @@ router.post(
         });
       }
 
-      const [existingRows] = await conn.execute(
+      const existingResult = await conn.execute(
         `SELECT id, pertanyaan, gambar_soal, tabel_data,
           pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
           jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
           pasangan_menjodohkan, pernyataan_checklist
          FROM soal
-         WHERE instrumen_id = ?
+         WHERE instrumen_id = ${dbPlaceholder(1)}
          FOR UPDATE`,
         [instrumenId]
       );
+      const existingRows = resultRows(existingResult);
 
       const existingKeys = new Set(existingRows.map(getDuplicateKey));
-      const [lastRows] = await conn.execute(
-        'SELECT MAX(nomor) AS nomor FROM soal WHERE instrumen_id = ?',
+      const lastResult = await conn.execute(
+        `SELECT MAX(nomor) AS nomor FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
         [instrumenId]
       );
+      const lastRows = resultRows(lastResult);
 
       let nextNomor = Number(lastRows[0]?.nomor || 0) + 1;
       const targetSoal = Number(instrumen.jumlah_soal || 0);
@@ -523,13 +584,13 @@ router.post(
           continue;
         }
 
-        const [insertResult] = await conn.execute(
+        const insertResult = await conn.execute(
           `INSERT INTO soal
             (instrumen_id, nomor, pertanyaan, gambar_soal, tabel_data,
              pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
              jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
              pasangan_menjodohkan, pernyataan_checklist)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (${dbPlaceholders(17).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
           [
             instrumenId,
             nextNomor,
@@ -551,7 +612,7 @@ router.post(
           ]
         );
 
-        addedSoalIds.push(insertResult.insertId);
+        addedSoalIds.push(resultInsertId(insertResult));
         usedBankSoalIds.push(bankSoal.id);
         if (!isSameKelas(bankSoal.kelas, instrumen.kelas)) {
           crossClassCount += 1;
@@ -562,12 +623,13 @@ router.post(
       }
 
       if (usedBankSoalIds.length) {
-        const updatePlaceholders = usedBankSoalIds.map(() => '?').join(',');
+        const updateParams = [];
+        const updatePlaceholders = usedBankSoalIds.map(id => addParam(updateParams, id)).join(',');
         await conn.execute(
           `UPDATE bank_soal
            SET usage_count = usage_count + 1, updated_at = NOW()
            WHERE id IN (${updatePlaceholders})`,
-          usedBankSoalIds
+          updateParams
         );
       }
 
@@ -606,12 +668,15 @@ router.get(
   authorize('guru', 'admin', 'admin_sekolah', 'super_admin'),
   async (req, res) => {
     try {
-      const where = ['bs.id = ?', 'bs.is_aktif = 1'];
-      const params = [req.params.id];
+      const params = [];
+      const where = [
+        `bs.id = ${addParam(params, req.params.id)}`,
+        `bs.is_aktif = ${ACTIVE_SQL}`
+      ];
       const scope = appendSekolahScope(where, params, req.user, 'bs.id_sekolah', req.query.id_sekolah);
       if (!scope.ok) return denyAccess(res);
 
-      const [rows] = await pool.execute(
+      const result = await pool.execute(
         `SELECT
           bs.*,
           sk.nama_sekolah,
@@ -623,6 +688,7 @@ router.get(
          LIMIT 1`,
         params
       );
+      const rows = resultRows(result);
 
       if (!rows.length) {
         return res.status(404).json({
@@ -649,19 +715,22 @@ router.delete(
   authorize('guru', 'admin', 'admin_sekolah', 'super_admin'),
   async (req, res) => {
     try {
-      const where = ['id = ?', 'is_aktif = 1'];
-      const params = [req.params.id];
+      const params = [];
+      const where = [
+        `id = ${addParam(params, req.params.id)}`,
+        `is_aktif = ${ACTIVE_SQL}`
+      ];
       const scope = appendSekolahScope(where, params, req.user, 'id_sekolah', req.query.id_sekolah);
       if (!scope.ok) return denyAccess(res);
 
-      const [result] = await pool.execute(
+      const result = await pool.execute(
         `UPDATE bank_soal
-         SET is_aktif = 0, updated_at = NOW()
+         SET is_aktif = ${INACTIVE_SQL}, updated_at = NOW()
          WHERE ${where.join(' AND ')}`,
         params
       );
 
-      if (result.affectedRows === 0) {
+      if (resultRowCount(result) === 0) {
         return res.status(404).json({
           success: false,
           message: 'Soal Bank Soal tidak ditemukan.'
