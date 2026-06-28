@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { pool } = require('../config/database');
+const { pool, dbPlaceholder } = require('../config/database');
 
 function normalizePeran(peran) {
   return peran === 'admin' ? 'admin_sekolah' : peran;
@@ -32,7 +32,7 @@ const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'SECRETKEY');
     const userId = decoded.id_user || decoded.id;
 
-    const [rows] = await pool.execute(
+    const result = await pool.execute(
       `SELECT
         u.id,
         u.nama,
@@ -48,9 +48,10 @@ const authenticate = async (req, res, next) => {
         s.nama_sekolah
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
-       WHERE u.id = ?`,
+       WHERE u.id = ${dbPlaceholder(1)}`,
       [userId]
     );
+    const rows = result.rows;
 
     if (rows.length === 0 || !rows[0].is_aktif) {
       return res.status(401).json({ success: false, message: 'Akun tidak ditemukan atau tidak aktif.' });

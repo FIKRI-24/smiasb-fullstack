@@ -1,4 +1,4 @@
-const { pool } = require('../config/database');
+const { pool, addParam, dbPlaceholder } = require('../config/database');
 
 const ACCESS_DENIED_MESSAGE = 'Anda tidak memiliki akses ke data ini';
 
@@ -48,8 +48,7 @@ function appendSekolahScope(where, params, user, column, requestedSekolahId = nu
 
   if (isSuperAdmin(user)) {
     if (targetSekolahId) {
-      where.push(`${column} = ?`);
-      params.push(targetSekolahId);
+      where.push(`${column} = ${addParam(params, targetSekolahId)}`);
     }
 
     return { ok: true };
@@ -63,8 +62,7 @@ function appendSekolahScope(where, params, user, column, requestedSekolahId = nu
     return { ok: false };
   }
 
-  where.push(`${column} = ?`);
-  params.push(user.id_sekolah);
+  where.push(`${column} = ${addParam(params, user.id_sekolah)}`);
 
   return { ok: true };
 }
@@ -116,12 +114,12 @@ function siswaKelasMatchesInstrumen(user, instrumen) {
 }
 
 async function getInstrumenById(instrumenId) {
-  const [rows] = await pool.execute(
-    'SELECT * FROM instrumen WHERE id = ?',
+  const result = await pool.execute(
+    `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
     [instrumenId]
   );
 
-  return rows[0] || null;
+  return result.rows[0] || null;
 }
 
 async function canAccessInstrumen(user, instrumenId, mode = 'view') {
