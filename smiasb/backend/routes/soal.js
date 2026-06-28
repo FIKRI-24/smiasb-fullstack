@@ -12,7 +12,41 @@ function resultRows(result) {
   return result.rows || result[0] || [];
 }
 
+function resultRowCount(result) {
+  return isPostgres
+    ? result.rowCount
+    : result.rowCount ?? result[0]?.affectedRows ?? result.affectedRows ?? 0;
+}
+
+async function getRouteConnection() {
+  if (!isPostgres) {
+    return pool.getConnection();
+  }
+
+  const client = await pool.connect();
+  return {
+    execute(sql, params) {
+      return client.query(sql, params);
+    },
+    beginTransaction() {
+      return client.query('BEGIN');
+    },
+    commit() {
+      return client.query('COMMIT');
+    },
+    rollback() {
+      return client.query('ROLLBACK');
+    },
+    release() {
+      client.release();
+    }
+  };
+}
+
 const COUNT_TOTAL_SQL = isPostgres ? 'COUNT(*)::int' : 'COUNT(*)';
+const INSERT_HASIL_SISWA_CONFLICT_SQL = isPostgres
+  ? 'ON CONFLICT (instrumen_id, siswa_id) DO NOTHING'
+  : 'ON DUPLICATE KEY UPDATE id = id';
 
 // Konfigurasi upload gambar
 const storage = multer.diskStorage({
@@ -1258,6 +1292,7 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
 router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
   const { instrumen_id, jawaban } = req.body;
   const siswa_id = req.user.id;
+  let conn;
 
   // Target kisi-kisi lama adalah 35 butir, tetapi nilai akhir harus memakai
   // total butir aktual yang tersimpan agar semua jawaban sesuai kunci bernilai 100.
@@ -1321,6 +1356,7 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
     let totalButirBenar = 0;
     let totalButirMaksimal = 0;
     const debugKoreksi = [];
+    const jawabanInserts = [];
 
     for (const soalData of soalList) {
       const jawabanSiswa = jawabanBySoalId.has(Number(soalData.id))
@@ -1344,18 +1380,14 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
         catatan: hasilKoreksi.catatan
       });
 
-      await pool.execute(
-        `INSERT INTO jawaban_siswa (soal_id, siswa_id, instrumen_id, id_sekolah, jawaban, is_benar)
-         VALUES (${dbPlaceholders(6).join(', ')})`,
-        [
-          soalData.id,
-          siswa_id,
-          instrumen_id,
-          access.instrumen.id_sekolah,
-          JSON.stringify(jawabanSiswa),
-          isPostgres ? hasilKoreksi.isBenar >= 1 : hasilKoreksi.isBenar
-        ]
-      );
+      jawabanInserts.push([
+        soalData.id,
+        siswa_id,
+        instrumen_id,
+        access.instrumen.id_sekolah,
+        JSON.stringify(jawabanSiswa),
+        isPostgres ? hasilKoreksi.isBenar >= 1 : hasilKoreksi.isBenar
+      ]);
     }
 
     const totalBenarFinal = Math.min(totalButirBenar, totalButirMaksimal);
@@ -1382,10 +1414,14 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
       }, null, 2));
     }
 
-    await pool.execute(
+    conn = await getRouteConnection();
+    await conn.beginTransaction();
+
+    const hasilInsertResult = await conn.execute(
       `INSERT INTO hasil_siswa 
        (instrumen_id, siswa_id, id_sekolah, nilai, total_benar, total_soal, waktu_selesai)
-       VALUES (${dbPlaceholders(6).join(', ')}, NOW())`,
+       VALUES (${dbPlaceholders(6).join(', ')}, NOW())
+       ${INSERT_HASIL_SISWA_CONFLICT_SQL}`,
       [
         instrumen_id,
         siswa_id,
@@ -1395,6 +1431,24 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
         totalButirMaksimal
       ]
     );
+
+    if (resultRowCount(hasilInsertResult) === 0) {
+      await conn.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'Anda sudah mengerjakan soal ini.'
+      });
+    }
+
+    for (const params of jawabanInserts) {
+      await conn.execute(
+        `INSERT INTO jawaban_siswa (soal_id, siswa_id, instrumen_id, id_sekolah, jawaban, is_benar)
+         VALUES (${dbPlaceholders(6).join(', ')})`,
+        params
+      );
+    }
+
+    await conn.commit();
 
     return res.json({
       success: true,
@@ -1410,11 +1464,19 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
     });
 
   } catch (err) {
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {}
+    }
+
     console.error(err);
     return res.status(500).json({
       success: false,
       message: 'Gagal menyimpan jawaban.'
     });
+  } finally {
+    if (conn) conn.release();
   }
 });
 // ============================================================
