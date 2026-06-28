@@ -1,12 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../config/database');
+const { pool, isPostgres, dbPlaceholder, dbPlaceholders } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { normalizeKelas } = require('../utils/accessControl');
 const { getUploadDir } = require('../utils/uploadPaths');
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
+
+const COUNT_TOTAL_SQL = isPostgres ? 'COUNT(*)::int' : 'COUNT(*)';
 
 // Konfigurasi upload gambar
 const storage = multer.diskStorage({
@@ -40,19 +46,25 @@ function denyAccess(res) {
 }
 
 async function getUserSiswa(userId) {
-  const [rows] = await pool.execute(
-    'SELECT id, peran, id_sekolah, kelas, nis, is_aktif FROM users WHERE id = ? AND peran = "siswa" AND is_aktif = 1',
+  const result = await pool.execute(
+    `SELECT id, peran, id_sekolah, kelas, nis, is_aktif
+     FROM users
+     WHERE id = ${dbPlaceholder(1)}
+       AND peran = 'siswa'
+       AND is_aktif = TRUE`,
     [userId]
   );
+  const rows = resultRows(result);
 
   return rows[0] || null;
 }
 
 async function getInstrumenById(instrumenId) {
-  const [rows] = await pool.execute(
-    'SELECT * FROM instrumen WHERE id = ?',
+  const result = await pool.execute(
+    `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
     [instrumenId]
   );
+  const rows = resultRows(result);
 
   return rows[0] || null;
 }
@@ -727,10 +739,13 @@ router.get('/status/:instrumenId', authenticate, authorize('siswa'), async (req,
       return denyAccess(res);
     }
 
-    const [hasil] = await pool.execute(
-      'SELECT * FROM hasil_siswa WHERE instrumen_id = ? AND siswa_id = ?',
+    const hasilResult = await pool.execute(
+      `SELECT * FROM hasil_siswa
+       WHERE instrumen_id = ${dbPlaceholder(1)}
+         AND siswa_id = ${dbPlaceholder(2)}`,
       [instrumenId, siswaId]
     );
+    const hasil = resultRows(hasilResult);
 
     if (hasil.length > 0) {
       return res.json({
@@ -766,10 +781,11 @@ router.get('/:instrumenId', authenticate, async (req, res) => {
       return denyAccess(res);
     }
 
-    const [rows] = await pool.execute(
-      'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC',
+    const result = await pool.execute(
+      `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC`,
       [req.params.instrumenId]
     );
+    const rows = resultRows(result);
 
     const soalWithParsed = rows.map(soal => {
       if (req.user.peran === 'siswa') {
@@ -802,10 +818,13 @@ router.get('/kerjakan/:instrumenId', authenticate, authorize('siswa'), async (re
     const instrumenData = access.instrumen;
 
     // CEK APAKAH SUDAH PERNAH MENGERJAKAN
-    const [sudahMengerjakan] = await pool.execute(
-      'SELECT * FROM hasil_siswa WHERE instrumen_id = ? AND siswa_id = ?',
+    const sudahResult = await pool.execute(
+      `SELECT * FROM hasil_siswa
+       WHERE instrumen_id = ${dbPlaceholder(1)}
+         AND siswa_id = ${dbPlaceholder(2)}`,
       [instrumenId, siswaId]
     );
+    const sudahMengerjakan = resultRows(sudahResult);
 
     if (sudahMengerjakan.length > 0) {
       return res.status(403).json({
@@ -817,10 +836,11 @@ router.get('/kerjakan/:instrumenId', authenticate, authorize('siswa'), async (re
     }
 
     // AMBIL SEMUA SOAL
-    const [soal] = await pool.execute(
-      'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC',
+    const soalResult = await pool.execute(
+      `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC`,
       [instrumenId]
     );
+    const soal = resultRows(soalResult);
 
     const soalWithParsed = soal.map(sanitizeSoalForSiswa);
 
@@ -855,10 +875,13 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
     }
 
     // Cek target soal
-    const [instrumen] = await pool.execute(
-      'SELECT id, jumlah_soal, status, dibuat_oleh, id_sekolah FROM instrumen WHERE id = ?',
+    const instrumenResult = await pool.execute(
+      `SELECT id, jumlah_soal, status, dibuat_oleh, id_sekolah
+       FROM instrumen
+       WHERE id = ${dbPlaceholder(1)}`,
       [instrumen_id]
     );
+    const instrumen = resultRows(instrumenResult);
 
     if (instrumen.length === 0) {
       return res.status(404).json({ success: false, message: 'Instrumen tidak ditemukan' });
@@ -873,12 +896,13 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
       return denyAccess(res);
     }
 
-    const [countResult] = await pool.execute(
-      'SELECT COUNT(*) as total FROM soal WHERE instrumen_id = ?',
+    const countResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} as total FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [instrumen_id]
     );
+    const countRows = resultRows(countResult);
 
-    if (countResult[0].total >= instrumen[0].jumlah_soal) {
+    if (countRows[0].total >= instrumen[0].jumlah_soal) {
       return res.status(400).json({ success: false, message: `Target soal sudah tercapai (${instrumen[0].jumlah_soal} soal)` });
     }
 
@@ -979,10 +1003,11 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
     }
 
     // Ambil nomor terakhir
-    const [last] = await pool.execute(
-      'SELECT MAX(nomor) as nomor FROM soal WHERE instrumen_id = ?',
+    const lastResult = await pool.execute(
+      `SELECT MAX(nomor) as nomor FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [instrumen_id]
     );
+    const last = resultRows(lastResult);
     const nomor = (last[0].nomor || 0) + 1;
 
     // INSERT SOAL
@@ -992,7 +1017,7 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
        pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
        jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
        pasangan_menjodohkan, pernyataan_checklist)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (${dbPlaceholders(17).join(', ')})`,
       [
         instrumen_id, nomor, pertanyaan, gambar_soal, parsedTabelData,
         pilihan_a || null, pilihan_b || null, pilihan_c || null, pilihan_d || null, pilihan_e || null,
@@ -1014,10 +1039,14 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('gambar
 // ============================================================
 router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gambar_soal'), async (req, res) => {
   try {
-    const [existingSoal] = await pool.execute(
-      'SELECT s.*, i.status, i.dibuat_oleh, i.id_sekolah FROM soal s JOIN instrumen i ON s.instrumen_id = i.id WHERE s.id = ?',
+    const existingResult = await pool.execute(
+      `SELECT s.*, i.status, i.dibuat_oleh, i.id_sekolah
+       FROM soal s
+       JOIN instrumen i ON s.instrumen_id = i.id
+       WHERE s.id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const existingSoal = resultRows(existingResult);
 
     if (existingSoal.length === 0) {
       return res.status(404).json({ success: false, message: 'Soal tidak ditemukan' });
@@ -1098,12 +1127,22 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
 
     await pool.execute(
       `UPDATE soal SET 
-        pertanyaan = ?, gambar_soal = ?, tabel_data = ?,
-        pilihan_a = ?, pilihan_b = ?, pilihan_c = ?, pilihan_d = ?, pilihan_e = ?,
-        jawaban_benar = ?, jawaban_benar_json = ?,
-        tipe_soal = ?, kategori_instrumen = ?, bobot = ?,
-        pasangan_menjodohkan = ?, pernyataan_checklist = ?
-       WHERE id = ?`,
+        pertanyaan = ${dbPlaceholder(1)},
+        gambar_soal = ${dbPlaceholder(2)},
+        tabel_data = ${dbPlaceholder(3)},
+        pilihan_a = ${dbPlaceholder(4)},
+        pilihan_b = ${dbPlaceholder(5)},
+        pilihan_c = ${dbPlaceholder(6)},
+        pilihan_d = ${dbPlaceholder(7)},
+        pilihan_e = ${dbPlaceholder(8)},
+        jawaban_benar = ${dbPlaceholder(9)},
+        jawaban_benar_json = ${dbPlaceholder(10)},
+        tipe_soal = ${dbPlaceholder(11)},
+        kategori_instrumen = ${dbPlaceholder(12)},
+        bobot = ${dbPlaceholder(13)},
+        pasangan_menjodohkan = ${dbPlaceholder(14)},
+        pernyataan_checklist = ${dbPlaceholder(15)}
+       WHERE id = ${dbPlaceholder(16)}`,
       [
         req.body.pertanyaan || existingSoal[0].pertanyaan,
         gambar_soal,
@@ -1137,10 +1176,14 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('gamb
 // ============================================================
 router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res) => {
   try {
-    const [soal] = await pool.execute(
-      'SELECT s.*, i.status, i.dibuat_oleh, i.id_sekolah FROM soal s JOIN instrumen i ON s.instrumen_id = i.id WHERE s.id = ?',
+    const soalResult = await pool.execute(
+      `SELECT s.*, i.status, i.dibuat_oleh, i.id_sekolah
+       FROM soal s
+       JOIN instrumen i ON s.instrumen_id = i.id
+       WHERE s.id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const soal = resultRows(soalResult);
 
     if (soal.length === 0) {
       return res.status(404).json({
@@ -1174,20 +1217,21 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
 
     // Hapus soal
     await pool.execute(
-      'DELETE FROM soal WHERE id = ?',
+      `DELETE FROM soal WHERE id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
 
     // Ambil ulang sisa soal berdasarkan urutan lama
-    const [sisaSoal] = await pool.execute(
-      'SELECT id FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC, id ASC',
+    const sisaResult = await pool.execute(
+      `SELECT id FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC, id ASC`,
       [instrumenId]
     );
+    const sisaSoal = resultRows(sisaResult);
 
     // Reset nomor soal satu per satu agar urut kembali: 1, 2, 3, dst
     for (let i = 0; i < sisaSoal.length; i++) {
       await pool.execute(
-        'UPDATE soal SET nomor = ? WHERE id = ?',
+        `UPDATE soal SET nomor = ${dbPlaceholder(1)} WHERE id = ${dbPlaceholder(2)}`,
         [i + 1, sisaSoal[i].id]
       );
     }
@@ -1239,10 +1283,13 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
       return denyAccess(res);
     }
 
-    const [sudahMengerjakan] = await pool.execute(
-      'SELECT * FROM hasil_siswa WHERE instrumen_id = ? AND siswa_id = ?',
+    const sudahResult = await pool.execute(
+      `SELECT * FROM hasil_siswa
+       WHERE instrumen_id = ${dbPlaceholder(1)}
+         AND siswa_id = ${dbPlaceholder(2)}`,
       [instrumen_id, siswa_id]
     );
+    const sudahMengerjakan = resultRows(sudahResult);
 
     if (sudahMengerjakan.length > 0) {
       return res.status(403).json({
@@ -1251,10 +1298,11 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
       });
     }
 
-    const [soalList] = await pool.execute(
-      'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC',
+    const soalResult = await pool.execute(
+      `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC`,
       [instrumen_id]
     );
+    const soalList = resultRows(soalResult);
 
     if (soalList.length === 0) {
       return res.status(400).json({
@@ -1298,14 +1346,14 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
 
       await pool.execute(
         `INSERT INTO jawaban_siswa (soal_id, siswa_id, instrumen_id, id_sekolah, jawaban, is_benar)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         VALUES (${dbPlaceholders(6).join(', ')})`,
         [
           soalData.id,
           siswa_id,
           instrumen_id,
           access.instrumen.id_sekolah,
           JSON.stringify(jawabanSiswa),
-          hasilKoreksi.isBenar
+          isPostgres ? hasilKoreksi.isBenar >= 1 : hasilKoreksi.isBenar
         ]
       );
     }
@@ -1337,7 +1385,7 @@ router.post('/submit', authenticate, authorize('siswa'), async (req, res) => {
     await pool.execute(
       `INSERT INTO hasil_siswa 
        (instrumen_id, siswa_id, id_sekolah, nilai, total_benar, total_soal, waktu_selesai)
-       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+       VALUES (${dbPlaceholders(6).join(', ')}, NOW())`,
       [
         instrumen_id,
         siswa_id,
@@ -1386,7 +1434,7 @@ router.get(
         return denyAccess(res);
       }
 
-      const [results] = await pool.execute(
+      const resultsResult = await pool.execute(
         `
         SELECT 
           hs.*,
@@ -1396,16 +1444,18 @@ router.get(
         FROM hasil_siswa hs
         JOIN users u
           ON hs.siswa_id = u.id
-        WHERE hs.instrumen_id = ?
+        WHERE hs.instrumen_id = ${dbPlaceholder(1)}
         ORDER BY hs.nilai DESC, hs.waktu_selesai ASC
         `,
         [instrumenId]
       );
+      const results = resultRows(resultsResult);
 
-      const [soalList] = await pool.execute(
-        'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC',
+      const soalResult = await pool.execute(
+        `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC`,
         [instrumenId]
       );
+      const soalList = resultRows(soalResult);
 
       const analisisButirMap = new Map();
 
@@ -1429,7 +1479,7 @@ router.get(
         let totalButirBenarAktual = 0;
         let totalButirMaksimalAktual = 0;
 
-        const [detail] = await pool.execute(
+        const detailResult = await pool.execute(
           `
           SELECT
             js.id AS jawaban_id,
@@ -1457,12 +1507,13 @@ router.get(
           LEFT JOIN jawaban_siswa js
             ON js.soal_id = s.id
             AND js.instrumen_id = s.instrumen_id
-            AND js.siswa_id = ?
-          WHERE s.instrumen_id = ?
+            AND js.siswa_id = ${dbPlaceholder(1)}
+          WHERE s.instrumen_id = ${dbPlaceholder(2)}
           ORDER BY s.nomor ASC
           `,
           [siswa.siswa_id, instrumenId]
         );
+        const detail = resultRows(detailResult);
 
         siswa.detail_jawaban = detail.map((d) => {
           let parsedJawaban = d.jawaban;
@@ -1665,10 +1716,13 @@ router.get(
       }
 
       // 1. Ambil data instrumen untuk mengetahui kelas target
-      const [instrumen] = await pool.execute(
-        'SELECT id, judul, kelas, id_sekolah FROM instrumen WHERE id = ?',
+      const instrumenResult = await pool.execute(
+        `SELECT id, judul, kelas, id_sekolah
+         FROM instrumen
+         WHERE id = ${dbPlaceholder(1)}`,
         [instrumenId]
       );
+      const instrumen = resultRows(instrumenResult);
 
       if (instrumen.length === 0) {
         return res.status(404).json({
@@ -1681,15 +1735,13 @@ router.get(
       const targetSekolah = instrumen[0].id_sekolah;
 
       // 2. Ambil daftar siswa yang sudah mengerjakan instrumen ini
-      const [sudahMengerjakan] = await pool.execute(
-        `SELECT siswa_id FROM hasil_siswa WHERE instrumen_id = ?`,
+      const sudahResult = await pool.execute(
+        `SELECT siswa_id FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`,
         [instrumenId]
       );
+      const sudahMengerjakan = resultRows(sudahResult);
 
       const sudahMengerjakanIds = sudahMengerjakan.map(s => s.siswa_id);
-      const placeholders = sudahMengerjakanIds.length > 0 
-        ? sudahMengerjakanIds.map(() => '?').join(',') 
-        : null;
 
       // 3. Ambil siswa yang BELUM mengerjakan, filter berdasarkan kelas instrumen
       let query = `
@@ -1701,20 +1753,22 @@ router.get(
     u.nis
   FROM users u
   WHERE u.peran = 'siswa'
-  AND u.kelas = ?
-  AND u.id_sekolah = ?
+  AND u.kelas = ${dbPlaceholder(1)}
+  AND u.id_sekolah = ${dbPlaceholder(2)}
 `;
 
       let params = [targetKelas, targetSekolah];
 
       if (sudahMengerjakanIds.length > 0) {
+        const placeholders = dbPlaceholders(sudahMengerjakanIds.length, params.length + 1).join(',');
         query += ` AND u.id NOT IN (${placeholders})`;
         params = [...params, ...sudahMengerjakanIds];
       }
 
       query += ` ORDER BY u.nama ASC`;
 
-      const [belumMengerjakan] = await pool.execute(query, params);
+      const belumResult = await pool.execute(query, params);
+      const belumMengerjakan = resultRows(belumResult);
 
       // 4. Kelompokkan berdasarkan kelas (rombel) - untuk fleksibilitas jika ingin grup per kelas
       const groupedByKelas = {};

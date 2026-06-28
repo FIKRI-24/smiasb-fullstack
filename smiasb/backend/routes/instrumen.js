@@ -8,7 +8,7 @@ const cheerio = require('cheerio');
 const JSZip = require('jszip');
 const XLSX = require('xlsx');
 const { body, validationResult } = require('express-validator');
-const { pool } = require('../config/database');
+const { pool, isPostgres, dbPlaceholder, dbPlaceholders, addParam } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const { syncInstrumenToBankSoal } = require('../utils/bankSoalSync');
 const {
@@ -22,6 +22,42 @@ const {
   normalizeKelas
 } = require('../utils/accessControl');
 const { getUploadRoot, getUploadDir } = require('../utils/uploadPaths');
+
+const LIKE_OPERATOR = isPostgres ? 'ILIKE' : 'LIKE';
+const COUNT_TOTAL_SQL = isPostgres ? 'COUNT(*)::int' : 'COUNT(*)';
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
+
+function resultInsertId(result) {
+  return isPostgres ? result.rows[0]?.id : result.insertId ?? result[0]?.insertId;
+}
+
+async function getRouteConnection() {
+  if (!isPostgres) {
+    return pool.getConnection();
+  }
+
+  const client = await pool.connect();
+  return {
+    execute(sql, params) {
+      return client.query(sql, params);
+    },
+    beginTransaction() {
+      return client.query('BEGIN');
+    },
+    commit() {
+      return client.query('COMMIT');
+    },
+    rollback() {
+      return client.query('ROLLBACK');
+    },
+    release() {
+      client.release();
+    }
+  };
+}
 
 // Konfigurasi upload file
 const storage = multer.diskStorage({
@@ -5528,7 +5564,7 @@ function quoteColumnName(column) {
     throw new Error(`Nama kolom tidak valid: ${column}`);
   }
 
-  return `\`${column}\``;
+  return isPostgres ? `"${column}"` : `\`${column}\``;
 }
 
 function parseDuplicateBoolean(value, defaultValue = true) {
@@ -5568,7 +5604,16 @@ function shuffleSoalRows(rows) {
 }
 
 async function getCopyableSoalColumns(conn) {
-  const [columns] = await conn.execute('SHOW COLUMNS FROM soal');
+  const result = isPostgres
+    ? await conn.execute(
+      `SELECT column_name AS "Field", is_generated AS "Extra"
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'soal'
+       ORDER BY ordinal_position`
+    )
+    : await conn.execute('SHOW COLUMNS FROM soal');
+  const columns = resultRows(result);
 
   return columns
     .filter(column => !DUPLICATE_SOAL_EXCLUDED_COLUMNS.has(column.Field))
@@ -5603,29 +5648,25 @@ function normalizeInstrumenTitle(value = '') {
 }
 
 async function findInstrumenWithSameTitleAndClass(executor, idSekolah, kelas, judul, excludeId = null) {
+  const params = [];
   const where = [
-    'id_sekolah <=> ?',
-    `${normalizeKelasSqlExpression('kelas')} = ?`,
-    'LOWER(TRIM(judul)) = ?'
-  ];
-  const params = [
-    idSekolah,
-    normalizeKelas(kelas),
-    normalizeInstrumenTitle(judul)
+    `id_sekolah ${isPostgres ? 'IS NOT DISTINCT FROM' : '<=>'} ${addParam(params, idSekolah)}`,
+    `${normalizeKelasSqlExpression('kelas')} = ${addParam(params, normalizeKelas(kelas))}`,
+    `LOWER(TRIM(judul)) = ${addParam(params, normalizeInstrumenTitle(judul))}`
   ];
 
   if (excludeId) {
-    where.push('id <> ?');
-    params.push(excludeId);
+    where.push(`id <> ${addParam(params, excludeId)}`);
   }
 
-  const [rows] = await executor.execute(
+  const result = await executor.execute(
     `SELECT id, judul, kelas
      FROM instrumen
      WHERE ${where.join(' AND ')}
      LIMIT 1`,
     params
   );
+  const rows = resultRows(result);
 
   return rows[0] || null;
 }
@@ -5652,35 +5693,35 @@ router.get('/', authenticate, async (req, res) => {
     if (!scope.ok) return denyAccess(res);
 
     if (isGuru(req.user)) {
-      where.push('i.dibuat_oleh = ?');
-      params.push(req.user.id);
+      where.push(`i.dibuat_oleh = ${addParam(params, req.user.id)}`);
     }
 
     if (isSiswa(req.user)) {
-      where.push('i.status = "aktif"');
+      where.push("i.status = 'aktif'");
 
       const siswaKelas = normalizeKelas(req.user.kelas);
       if (siswaKelas) {
-        where.push(`${normalizeKelasSqlExpression('i.kelas')} = ?`);
-        params.push(siswaKelas);
+        where.push(`${normalizeKelasSqlExpression('i.kelas')} = ${addParam(params, siswaKelas)}`);
       }
     }
 
-    if (jenis) { where.push('i.jenis = ?'); params.push(jenis); }
-    if (status && !isSiswa(req.user)) { where.push('i.status = ?'); params.push(status); }
+    if (jenis) { where.push(`i.jenis = ${addParam(params, jenis)}`); }
+    if (status && !isSiswa(req.user)) { where.push(`i.status = ${addParam(params, status)}`); }
     if (kelas && !isSiswa(req.user)) {
-      where.push(`${normalizeKelasSqlExpression('i.kelas')} = ?`);
-      params.push(normalizeKelas(kelas));
+      where.push(`${normalizeKelasSqlExpression('i.kelas')} = ${addParam(params, normalizeKelas(kelas))}`);
     }
-    if (mapel) { where.push('i.mata_pelajaran LIKE ?'); params.push('%' + mapel + '%'); }
+    if (mapel) { where.push(`i.mata_pelajaran ${LIKE_OPERATOR} ${addParam(params, '%' + mapel + '%')}`); }
     if (search) {
-      where.push('(i.judul LIKE ? OR i.deskripsi LIKE ?)');
-      params.push('%' + search + '%', '%' + search + '%');
+      const searchTerm = '%' + search + '%';
+      where.push(
+        `(i.judul ${LIKE_OPERATOR} ${addParam(params, searchTerm)} OR ` +
+        `i.deskripsi ${LIKE_OPERATOR} ${addParam(params, searchTerm)})`
+      );
     }
 
     const whereStr = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
-    const [rows] = await pool.query(
+    const rowsResult = await pool.query(
       `SELECT i.*, u.nama AS pembuat,
         (SELECT COUNT(*) FROM soal WHERE soal.instrumen_id = i.id) as jumlah_soal_terisi
        FROM instrumen i
@@ -5690,11 +5731,13 @@ router.get('/', authenticate, async (req, res) => {
        LIMIT ${limit} OFFSET ${offset}`,
       params
     );
+    const rows = resultRows(rowsResult);
 
-    const [total] = await pool.execute(
-      `SELECT COUNT(*) as total FROM instrumen i ${whereStr}`,
+    const totalResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} as total FROM instrumen i ${whereStr}`,
       params
     );
+    const total = resultRows(totalResult);
 
     return res.json({
       success: true,
@@ -5725,10 +5768,11 @@ router.get('/:id/download', authenticate, async (req, res) => {
       });
     }
 
-    const [rows] = await pool.execute(
-      'SELECT file_path, file_nama FROM instrumen WHERE id = ?',
+    const result = await pool.execute(
+      `SELECT file_path, file_nama FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const rows = resultRows(result);
     if (rows.length === 0 || !rows[0].file_path) {
       return res.status(404).json({ success: false, message: 'File tidak ditemukan.' });
     }
@@ -5755,14 +5799,15 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const [rows] = await pool.execute(
+    const result = await pool.execute(
       `SELECT i.*, u.nama AS pembuat,
               i.gunakan_batas_waktu, i.batas_waktu
        FROM instrumen i 
        LEFT JOIN users u ON i.dibuat_oleh = u.id
-       WHERE i.id = ?`,
+       WHERE i.id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const rows = resultRows(result);
     
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Instrumen tidak ditemukan.' });
@@ -5826,14 +5871,15 @@ router.get('/:id', authenticate, async (req, res) => {
       // ========== END VALIDASI BATAS WAKTU ==========
     }
 
-    const [soalRows] = await pool.execute(
+    const soalResult = await pool.execute(
       `SELECT id, nomor, pertanyaan, pilihan_a, pilihan_b, pilihan_c, pilihan_d, 
               jawaban_benar, tipe_soal, kategori_instrumen
        FROM soal 
-       WHERE instrumen_id = ? 
+       WHERE instrumen_id = ${dbPlaceholder(1)}
        ORDER BY nomor ASC`,
       [req.params.id]
     );
+    const soalRows = resultRows(soalResult);
 
     return res.json({
       success: true,
@@ -5887,9 +5933,9 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('file')
       });
     }
 
-    const [result] = await pool.execute(
+    const result = await pool.execute(
       `INSERT INTO instrumen (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (${dbPlaceholders(13).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
       [targetSekolah.id_sekolah, judul, deskripsi || null, jenis, mata_pelajaran, normalizedInstrumenKelas,
        parseInt(jumlah_soal), status || 'draft',
        file_path, file_nama, req.user.id,
@@ -5900,7 +5946,7 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('file')
     return res.status(201).json({
       success: true,
       message: 'Instrumen berhasil dibuat.',
-      data: { id: result.insertId }
+      data: { id: resultInsertId(result) }
     });
   } catch (err) {
     console.error(err);
@@ -5969,13 +6015,14 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       });
     }
 
-    conn = await pool.getConnection();
+    conn = await getRouteConnection();
     await conn.beginTransaction();
 
-    const [soalAsalRows] = await conn.execute(
-      'SELECT * FROM soal WHERE instrumen_id = ? ORDER BY nomor ASC, id ASC',
+    const soalAsalResult = await conn.execute(
+      `SELECT * FROM soal WHERE instrumen_id = ${dbPlaceholder(1)} ORDER BY nomor ASC, id ASC`,
       [instrumenAsal.id]
     );
+    const soalAsalRows = resultRows(soalAsalResult);
 
     if (soalAsalRows.length === 0) {
       await conn.rollback();
@@ -6001,11 +6048,11 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       });
     }
 
-    const [instrumenResult] = await conn.execute(
+    const instrumenResult = await conn.execute(
       `INSERT INTO instrumen
        (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status,
         file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (${dbPlaceholders(13).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
       [
         instrumenAsal.id_sekolah,
         judulBaru,
@@ -6023,14 +6070,14 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       ]
     );
 
-    const instrumenBaruId = instrumenResult.insertId;
+    const instrumenBaruId = resultInsertId(instrumenResult);
     const soalColumns = await getCopyableSoalColumns(conn);
     const soalUntukDisalin = acakSoal ? shuffleSoalRows(soalAsalRows) : soalAsalRows;
 
     if (soalColumns.length > 0 && soalUntukDisalin.length > 0) {
       const insertColumns = ['instrumen_id', 'nomor', ...soalColumns];
       const columnSql = insertColumns.map(quoteColumnName).join(', ');
-      const placeholderSql = insertColumns.map(() => '?').join(', ');
+      const placeholderSql = dbPlaceholders(insertColumns.length).join(', ');
       const insertSql = `INSERT INTO soal (${columnSql}) VALUES (${placeholderSql})`;
 
       for (let index = 0; index < soalUntukDisalin.length; index++) {
@@ -6103,10 +6150,11 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
   const { judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, gunakan_batas_waktu, batas_waktu } = req.body;
 
   try {
-    const [existing] = await pool.execute(
-      'SELECT * FROM instrumen WHERE id = ?',
+    const existingResult = await pool.execute(
+      `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const existing = resultRows(existingResult);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: 'Instrumen tidak ditemukan.' });
     }
@@ -6114,11 +6162,11 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
     const access = await canAccessInstrumen(req.user, req.params.id, 'manage');
     if (!access.ok) return denyAccess(res);
 
-    const [countResult] = await pool.execute(
-      'SELECT COUNT(*) as total FROM soal WHERE instrumen_id = ?',
+    const countResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} as total FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
-    const jumlahSoalSaatIni = countResult[0].total;
+    const jumlahSoalSaatIni = resultRows(countResult)[0].total;
     const targetSoal = parseInt(jumlah_soal) || existing[0].jumlah_soal;
 
     if (status === 'aktif' && jumlahSoalSaatIni < targetSoal) {
@@ -6152,10 +6200,19 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
 
     await pool.execute(
       `UPDATE instrumen SET 
-        judul=?, deskripsi=?, jenis=?, mata_pelajaran=?, kelas=?,
-        jumlah_soal=?, status=?, file_path=?, file_nama=?,
-        gunakan_batas_waktu=?, batas_waktu=?, updated_at=NOW() 
-       WHERE id=?`,
+        judul = ${dbPlaceholder(1)},
+        deskripsi = ${dbPlaceholder(2)},
+        jenis = ${dbPlaceholder(3)},
+        mata_pelajaran = ${dbPlaceholder(4)},
+        kelas = ${dbPlaceholder(5)},
+        jumlah_soal = ${dbPlaceholder(6)},
+        status = ${dbPlaceholder(7)},
+        file_path = ${dbPlaceholder(8)},
+        file_nama = ${dbPlaceholder(9)},
+        gunakan_batas_waktu = ${dbPlaceholder(10)},
+        batas_waktu = ${dbPlaceholder(11)},
+        updated_at = NOW()
+       WHERE id = ${dbPlaceholder(12)}`,
       [judul || existing[0].judul, deskripsi || existing[0].deskripsi,
        jenis || existing[0].jenis, mata_pelajaran || existing[0].mata_pelajaran,
        normalizedInstrumenKelas, targetSoal,
@@ -6205,10 +6262,10 @@ router.delete('/:id/reset-soal', authenticate, authorize('guru', 'admin'), async
     const access = await canAccessInstrumen(req.user, id, 'manage');
     if (!access.ok) return denyAccess(res);
 
-    await pool.execute('DELETE FROM jawaban_siswa WHERE instrumen_id = ?', [id]);
-    await pool.execute('DELETE FROM hasil_siswa WHERE instrumen_id = ?', [id]);
-    await pool.execute('DELETE FROM soal WHERE instrumen_id = ?', [id]);
-    await pool.execute('UPDATE instrumen SET status = "draft" WHERE id = ?', [id]);
+    await pool.execute(`DELETE FROM jawaban_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+    await pool.execute(`DELETE FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+    await pool.execute(`DELETE FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+    await pool.execute(`UPDATE instrumen SET status = 'draft' WHERE id = ${dbPlaceholder(1)}`, [id]);
 
     return res.json({
       success: true,
@@ -6225,10 +6282,11 @@ router.delete('/:id/reset-soal', authenticate, authorize('guru', 'admin'), async
 // ============================================================
 router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res) => {
   try {
-    const [existing] = await pool.execute(
-      'SELECT * FROM instrumen WHERE id = ?',
+    const existingResult = await pool.execute(
+      `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
       [req.params.id]
     );
+    const existing = resultRows(existingResult);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: 'Instrumen tidak ditemukan.' });
     }
@@ -6240,7 +6298,7 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
 
-    await pool.execute('DELETE FROM instrumen WHERE id = ?', [req.params.id]);
+    await pool.execute(`DELETE FROM instrumen WHERE id = ${dbPlaceholder(1)}`, [req.params.id]);
     return res.json({ success: true, message: 'Instrumen berhasil dihapus.' });
   } catch (err) {
     console.error(err);
@@ -6257,10 +6315,11 @@ router.patch('/:id/batas-waktu', authenticate, authorize('guru', 'admin'), async
     const { gunakan_batas_waktu, batas_waktu } = req.body;
 
     // Cek apakah instrumen ada
-    const [existing] = await pool.execute(
-      'SELECT * FROM instrumen WHERE id = ?',
+    const existingResult = await pool.execute(
+      `SELECT * FROM instrumen WHERE id = ${dbPlaceholder(1)}`,
       [id]
     );
+    const existing = resultRows(existingResult);
 
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: 'Instrumen tidak ditemukan.' });
@@ -6272,10 +6331,10 @@ router.patch('/:id/batas-waktu', authenticate, authorize('guru', 'admin'), async
     // Update hanya batas waktu (tidak mengubah field lain)
     await pool.execute(
       `UPDATE instrumen SET 
-        gunakan_batas_waktu = ?,
-        batas_waktu = ?,
+        gunakan_batas_waktu = ${dbPlaceholder(1)},
+        batas_waktu = ${dbPlaceholder(2)},
         updated_at = NOW()
-       WHERE id = ?`,
+       WHERE id = ${dbPlaceholder(3)}`,
       [
         gunakan_batas_waktu !== undefined ? gunakan_batas_waktu : existing[0].gunakan_batas_waktu,
         batas_waktu !== undefined ? batas_waktu : existing[0].batas_waktu,
@@ -6649,10 +6708,11 @@ router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), 
 
     const instrumen = access.instrumen;
 
-    const [hasilRows] = await pool.execute(
-      'SELECT COUNT(*) AS total FROM hasil_siswa WHERE instrumen_id = ?',
+    const hasilResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} AS total FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [id]
     );
+    const hasilRows = resultRows(hasilResult);
 
     if (hasilRows[0].total > 0) {
       return res.status(400).json({
@@ -6661,10 +6721,11 @@ router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), 
       });
     }
 
-    const [existingSoalRows] = await pool.execute(
-      'SELECT COUNT(*) AS total FROM soal WHERE instrumen_id = ?',
+    const existingSoalResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} AS total FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [id]
     );
+    const existingSoalRows = resultRows(existingSoalResult);
 
     if (existingSoalRows[0].total > 0 && !replace_existing) {
       return res.status(400).json({
@@ -6692,18 +6753,18 @@ router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), 
       });
     }
 
-    conn = await pool.getConnection();
+    conn = await getRouteConnection();
     await conn.beginTransaction();
 
     if (replace_existing) {
-      await conn.execute('DELETE FROM jawaban_siswa WHERE instrumen_id = ?', [id]);
-      await conn.execute('DELETE FROM hasil_siswa WHERE instrumen_id = ?', [id]);
-      await conn.execute('DELETE FROM soal WHERE instrumen_id = ?', [id]);
+      await conn.execute(`DELETE FROM jawaban_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+      await conn.execute(`DELETE FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+      await conn.execute(`DELETE FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
     }
 
     if (auto_update_jumlah_soal) {
       await conn.execute(
-        'UPDATE instrumen SET jumlah_soal = ?, updated_at = NOW() WHERE id = ?',
+        `UPDATE instrumen SET jumlah_soal = ${dbPlaceholder(1)}, updated_at = NOW() WHERE id = ${dbPlaceholder(2)}`,
         [soal_preview.length, id]
       );
     } else if (soal_preview.length > Number(instrumen.jumlah_soal || 0)) {
@@ -6783,13 +6844,13 @@ router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), 
       const kategori = soal.kategori_instrumen || instrumen.jenis || 'HOTS';
       const bobot = Number(soal.bobot || 1);
 
-      const [result] = await conn.execute(
+      const result = await conn.execute(
         `INSERT INTO soal
         (instrumen_id, nomor, pertanyaan, gambar_soal, tabel_data,
          pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
          jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
          pasangan_menjodohkan, pernyataan_checklist)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (${dbPlaceholders(17).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
         [
           id,
           nomor,
@@ -6812,7 +6873,7 @@ router.post('/:id/import-excel/save', authenticate, authorize('guru', 'admin'), 
       );
 
       inserted.push({
-        id: result.insertId,
+        id: resultInsertId(result),
         nomor,
         tipe_soal: tipeSoal
       });
@@ -6898,10 +6959,11 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
 
     const instrumen = access.instrumen;
 
-    const [hasilRows] = await pool.execute(
-      'SELECT COUNT(*) AS total FROM hasil_siswa WHERE instrumen_id = ?',
+    const hasilResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} AS total FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [id]
     );
+    const hasilRows = resultRows(hasilResult);
 
     if (hasilRows[0].total > 0) {
       return res.status(400).json({
@@ -6910,10 +6972,11 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
       });
     }
 
-    const [existingSoalRows] = await pool.execute(
-      'SELECT COUNT(*) AS total FROM soal WHERE instrumen_id = ?',
+    const existingSoalResult = await pool.execute(
+      `SELECT ${COUNT_TOTAL_SQL} AS total FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`,
       [id]
     );
+    const existingSoalRows = resultRows(existingSoalResult);
 
     if (existingSoalRows[0].total > 0 && !replace_existing) {
       return res.status(400).json({
@@ -6998,18 +7061,18 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
       });
     }
 
-    conn = await pool.getConnection();
+    conn = await getRouteConnection();
     await conn.beginTransaction();
 
     if (replace_existing) {
-      await conn.execute('DELETE FROM jawaban_siswa WHERE instrumen_id = ?', [id]);
-      await conn.execute('DELETE FROM hasil_siswa WHERE instrumen_id = ?', [id]);
-      await conn.execute('DELETE FROM soal WHERE instrumen_id = ?', [id]);
+      await conn.execute(`DELETE FROM jawaban_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+      await conn.execute(`DELETE FROM hasil_siswa WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
+      await conn.execute(`DELETE FROM soal WHERE instrumen_id = ${dbPlaceholder(1)}`, [id]);
     }
 
     if (auto_update_jumlah_soal) {
       await conn.execute(
-        'UPDATE instrumen SET jumlah_soal = ?, updated_at = NOW() WHERE id = ?',
+        `UPDATE instrumen SET jumlah_soal = ${dbPlaceholder(1)}, updated_at = NOW() WHERE id = ${dbPlaceholder(2)}`,
         [soal_preview.length, id]
       );
     } else if (soal_preview.length > Number(instrumen.jumlah_soal || 0)) {
@@ -7088,13 +7151,13 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
       const kategori = soal.kategori_instrumen || instrumen.jenis || 'HOTS';
       const bobot = Number(soal.bobot || 1);
 
-      const [result] = await conn.execute(
+      const result = await conn.execute(
         `INSERT INTO soal 
         (instrumen_id, nomor, pertanyaan, gambar_soal, tabel_data,
          pilihan_a, pilihan_b, pilihan_c, pilihan_d, pilihan_e,
          jawaban_benar, jawaban_benar_json, tipe_soal, kategori_instrumen, bobot,
          pasangan_menjodohkan, pernyataan_checklist)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (${dbPlaceholders(17).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
         [
           id,
           nomor,
@@ -7117,7 +7180,7 @@ router.post('/:id/import-word/save', authenticate, authorize('guru', 'admin'), a
       );
 
       inserted.push({
-        id: result.insertId,
+        id: resultInsertId(result),
         nomor,
         tipe_soal: tipeSoal
       });
