@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
-const { pool } = require('../config/database');
+const { pool, isPostgres, addParam } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const {
   appendSekolahScope,
@@ -12,6 +12,10 @@ const {
   isSiswa,
   parseId
 } = require('../utils/accessControl');
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
 
 function whereSql(where) {
   return where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -25,15 +29,13 @@ function buildInstrumenScope(user, requestedSekolahId) {
   if (!scope.ok) return { ok: false, where, params };
 
   if (isGuru(user)) {
-    where.push('i.dibuat_oleh = ?');
-    params.push(user.id);
+    where.push(`i.dibuat_oleh = ${addParam(params, user.id)}`);
   }
 
   if (isSiswa(user)) {
-    where.push('i.status = "aktif"');
+    where.push("i.status = 'aktif'");
     if (user.kelas) {
-      where.push('i.kelas = ?');
-      params.push(user.kelas);
+      where.push(`i.kelas = ${addParam(params, user.kelas)}`);
     }
   }
 
@@ -54,15 +56,15 @@ async function getDashboardStats(user, requestedSekolahId) {
 
   const instrumenWhere = whereSql(instrumenScope.where);
 
-  const [totalInstrumen] = await pool.execute(
+  const totalInstrumen = resultRows(await pool.execute(
     `SELECT COUNT(*) as total FROM instrumen i ${instrumenWhere}`,
     instrumenScope.params
-  );
+  ));
 
-  const [instrumenAktif] = await pool.execute(
-    `SELECT COUNT(*) as total FROM instrumen i ${whereSql([...instrumenScope.where, 'i.status = "aktif"'])}`,
+  const instrumenAktif = resultRows(await pool.execute(
+    `SELECT COUNT(*) as total FROM instrumen i ${whereSql([...instrumenScope.where, "i.status = 'aktif'"])}`,
     instrumenScope.params
-  );
+  ));
 
   let totalGuru = [{ total: 0 }];
   let totalSiswa = [{ total: 0 }];
@@ -71,24 +73,24 @@ async function getDashboardStats(user, requestedSekolahId) {
     const userScope = buildUserSchoolScope(user, requestedSekolahId);
     if (!userScope.ok) return null;
 
-    totalGuru = (await pool.execute(
-      `SELECT COUNT(*) as total FROM users u ${whereSql([...userScope.where, 'u.peran = "guru"', 'u.is_aktif = 1'])}`,
+    totalGuru = resultRows(await pool.execute(
+      `SELECT COUNT(*) as total FROM users u ${whereSql([...userScope.where, "u.peran = 'guru'", 'u.is_aktif = TRUE'])}`,
       userScope.params
-    ))[0];
+    ));
 
-    totalSiswa = (await pool.execute(
-      `SELECT COUNT(*) as total FROM users u ${whereSql([...userScope.where, 'u.peran = "siswa"', 'u.is_aktif = 1'])}`,
+    totalSiswa = resultRows(await pool.execute(
+      `SELECT COUNT(*) as total FROM users u ${whereSql([...userScope.where, "u.peran = 'siswa'", 'u.is_aktif = TRUE'])}`,
       userScope.params
-    ))[0];
+    ));
   } else if (isGuru(user)) {
     totalGuru = [{ total: 1 }];
-    totalSiswa = (await pool.execute(
+    totalSiswa = resultRows(await pool.execute(
       `SELECT COUNT(DISTINCT hs.siswa_id) as total
        FROM hasil_siswa hs
        JOIN instrumen i ON i.id = hs.instrumen_id
        ${instrumenWhere}`,
       instrumenScope.params
-    ))[0];
+    ));
   } else if (isSiswa(user)) {
     totalSiswa = [{ total: 1 }];
   }
@@ -105,13 +107,13 @@ async function getDistribusiInstrumen(user, requestedSekolahId) {
   const scope = buildInstrumenScope(user, requestedSekolahId);
   if (!scope.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT i.jenis as jenis, COUNT(*) as jumlah
      FROM instrumen i
      ${whereSql(scope.where)}
      GROUP BY i.jenis`,
     scope.params
-  );
+  ));
 
   return rows;
 }
@@ -120,7 +122,7 @@ async function getInstrumenTerbaru(user, requestedSekolahId) {
   const scope = buildInstrumenScope(user, requestedSekolahId);
   if (!scope.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT i.id, i.judul, i.jenis, i.status, i.created_at, u.nama as pembuat
      FROM instrumen i
      LEFT JOIN users u ON i.dibuat_oleh = u.id
@@ -128,7 +130,7 @@ async function getInstrumenTerbaru(user, requestedSekolahId) {
      ORDER BY i.created_at DESC
      LIMIT 5`,
     scope.params
-  );
+  ));
 
   return rows;
 }
@@ -141,11 +143,10 @@ async function getAktivitasTerbaru(user, requestedSekolahId) {
     const scope = appendSekolahScope(where, params, user, 'u.id_sekolah', requestedSekolahId);
     if (!scope.ok) return null;
   } else {
-    where.push('al.user_id = ?');
-    params.push(user.id);
+    where.push(`al.user_id = ${addParam(params, user.id)}`);
   }
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT al.aksi, al.detail, al.created_at, u.nama, u.peran
      FROM activity_log al
      LEFT JOIN users u ON al.user_id = u.id
@@ -153,7 +154,7 @@ async function getAktivitasTerbaru(user, requestedSekolahId) {
      ORDER BY al.created_at DESC
      LIMIT 10`,
     params
-  );
+  ));
 
   return rows;
 }
@@ -166,8 +167,7 @@ function buildChatScope(user, requestedSekolahId) {
     const scope = appendSekolahScope(where, params, user, 'u.id_sekolah', requestedSekolahId);
     if (!scope.ok) return { ok: false, where, params };
   } else {
-    where.push('ch.user_id = ?');
-    params.push(user.id);
+    where.push(`ch.user_id = ${addParam(params, user.id)}`);
   }
 
   return { ok: true, where, params };
@@ -176,18 +176,20 @@ function buildChatScope(user, requestedSekolahId) {
 function buildGlobalSekolahFilter(alias, selectedSekolahId) {
   if (!selectedSekolahId) return { where: [], params: [] };
 
+  const params = [];
   return {
-    where: [`${alias}.id_sekolah = ?`],
-    params: [selectedSekolahId]
+    where: [`${alias}.id_sekolah = ${addParam(params, selectedSekolahId)}`],
+    params
   };
 }
 
 function buildSekolahTableFilter(alias, selectedSekolahId) {
   if (!selectedSekolahId) return { where: [], params: [] };
 
+  const params = [];
   return {
-    where: [`${alias}.id = ?`],
-    params: [selectedSekolahId]
+    where: [`${alias}.id = ${addParam(params, selectedSekolahId)}`],
+    params
   };
 }
 
@@ -214,13 +216,13 @@ let chatHistoryColumnsCache = null;
 async function getChatHistoryColumns() {
   if (chatHistoryColumnsCache) return chatHistoryColumnsCache;
 
-  const [columns] = await pool.execute(
-    `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_history'`
-  );
+  const sql = isPostgres
+    ? `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'chat_history'`
+    : `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_history'`;
 
-  chatHistoryColumnsCache = new Set(columns.map(column => column.COLUMN_NAME));
+  const columns = resultRows(await pool.execute(sql));
+
+  chatHistoryColumnsCache = new Set(columns.map(column => column.column_name || column.COLUMN_NAME));
   return chatHistoryColumnsCache;
 }
 
@@ -247,7 +249,9 @@ function normalizeChatbotStatus(value) {
 
 function getChatbotErrorExpression(hasIsErrorColumn) {
   if (hasIsErrorColumn) {
-    return 'COALESCE(ch.is_error, 0)';
+    return isPostgres
+      ? 'CASE WHEN COALESCE(ch.is_error, FALSE) THEN 1 ELSE 0 END'
+      : 'COALESCE(ch.is_error, 0)';
   }
 
   return `CASE
@@ -475,27 +479,27 @@ async function getDashboardFullData(user, requestedSekolahId) {
     ${chatWhere}
   `;
 
-  const [totalChat] = await pool.execute(`SELECT COUNT(*) as total ${chatFrom}`, chatScope.params);
-  const [uniqueQuestion] = await pool.execute(`SELECT COUNT(DISTINCT ch.pesan) as total ${chatFrom}`, chatScope.params);
-  const [errorAI] = await pool.execute(
+  const totalChat = resultRows(await pool.execute(`SELECT COUNT(*) as total ${chatFrom}`, chatScope.params));
+  const uniqueQuestion = resultRows(await pool.execute(`SELECT COUNT(DISTINCT ch.pesan) as total ${chatFrom}`, chatScope.params));
+  const errorAI = resultRows(await pool.execute(
     `SELECT COUNT(*) as total ${chatFrom} ${chatWhere ? 'AND' : 'WHERE'} ch.balasan LIKE '%kesalahan%'`,
     chatScope.params
-  );
-  const [topQuestions] = await pool.execute(
+  ));
+  const topQuestions = resultRows(await pool.execute(
     `SELECT ch.pesan, COUNT(*) as total
      ${chatFrom}
      GROUP BY ch.pesan
      ORDER BY total DESC
      LIMIT 5`,
     chatScope.params
-  );
-  const [dailyActivity] = await pool.execute(
+  ));
+  const dailyActivity = resultRows(await pool.execute(
     `SELECT DATE(ch.created_at) as tanggal, COUNT(*) as total
      ${chatFrom}
-     GROUP BY tanggal
+     GROUP BY DATE(ch.created_at)
      ORDER BY tanggal ASC`,
     chatScope.params
-  );
+  ));
 
   const insight = [];
 
