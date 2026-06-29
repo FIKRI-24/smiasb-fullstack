@@ -970,11 +970,15 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
     const instrumenFilter = buildGlobalSekolahFilter('i', selectedSekolahId);
     const hasilFilter = buildGlobalSekolahFilter('hs', selectedSekolahId);
 
-    const [[sekolah], [[totalSekolah]], [[totalGuru]], [[totalSiswa]], [[totalInstrumen]], [[instrumenAktif]], [[hasilStats]]] = await Promise.all([
+    const orderSekolahSql = isPostgres
+      ? `ORDER BY CASE nama_sekolah WHEN 'SMPS Adabiah Padang' THEN 1 WHEN 'SMPN 12 Padang' THEN 2 WHEN 'MTsN 6 Padang' THEN 3 ELSE 4 END, nama_sekolah ASC`
+      : `ORDER BY FIELD(nama_sekolah, 'SMPS Adabiah Padang', 'SMPN 12 Padang', 'MTsN 6 Padang'), nama_sekolah ASC`;
+
+    const results = await Promise.all([
       pool.execute(
         `SELECT id, nama_sekolah, status
          FROM sekolah
-         ORDER BY FIELD(nama_sekolah, "SMPS Adabiah Padang", "SMPN 12 Padang", "MTsN 6 Padang"), nama_sekolah ASC`
+         ${orderSekolahSql}`
       ),
       pool.execute(
         `SELECT COUNT(*) as total_sekolah FROM sekolah s ${whereSql(sekolahFilter.where)}`,
@@ -983,13 +987,13 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
       pool.execute(
         `SELECT COUNT(*) as total_guru
          FROM users u
-         ${whereSql([...guruFilter.where, 'u.peran = "guru"', 'u.is_aktif = 1'])}`,
+         ${whereSql([...guruFilter.where, "u.peran = 'guru'", 'u.is_aktif = TRUE'])}`,
         guruFilter.params
       ),
       pool.execute(
         `SELECT COUNT(*) as total_siswa
          FROM users u
-         ${whereSql([...siswaFilter.where, 'u.peran = "siswa"', 'u.is_aktif = 1'])}`,
+         ${whereSql([...siswaFilter.where, "u.peran = 'siswa'", 'u.is_aktif = TRUE'])}`,
         siswaFilter.params
       ),
       pool.execute(
@@ -999,7 +1003,7 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
       pool.execute(
         `SELECT COUNT(*) as instrumen_aktif
          FROM instrumen i
-         ${whereSql([...instrumenFilter.where, 'i.status = "aktif"'])}`,
+         ${whereSql([...instrumenFilter.where, "i.status = 'aktif'"])}`,
         instrumenFilter.params
       ),
       pool.execute(
@@ -1013,37 +1017,53 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
       )
     ]);
 
-    const selectedSchoolWhere = selectedSekolahId ? 'WHERE s.id = ?' : '';
-    const selectedSchoolParams = selectedSekolahId ? [selectedSekolahId] : [];
+    const sekolah = resultRows(results[0]);
+    const totalSekolah = resultRows(results[1])[0];
+    const totalGuru = resultRows(results[2])[0];
+    const totalSiswa = resultRows(results[3])[0];
+    const totalInstrumen = resultRows(results[4])[0];
+    const instrumenAktif = resultRows(results[5])[0];
+    const hasilStats = resultRows(results[6])[0];
 
-    const [perSekolah] = await pool.execute(
+    const selectedSchoolParams = [];
+    const selectedSchoolWhere = selectedSekolahId ? `WHERE s.id = ${addParam(selectedSchoolParams, selectedSekolahId)}` : '';
+
+    const orderSekolahAliasSql = isPostgres
+      ? `ORDER BY CASE s.nama_sekolah WHEN 'SMPS Adabiah Padang' THEN 1 WHEN 'SMPN 12 Padang' THEN 2 WHEN 'MTsN 6 Padang' THEN 3 ELSE 4 END, s.nama_sekolah ASC`
+      : `ORDER BY FIELD(s.nama_sekolah, 'SMPS Adabiah Padang', 'SMPN 12 Padang', 'MTsN 6 Padang'), s.nama_sekolah ASC`;
+
+    const perSekolah = resultRows(await pool.execute(
       `SELECT
          s.id,
          s.nama_sekolah,
          s.status,
-         COALESCE((SELECT COUNT(*) FROM users u WHERE u.id_sekolah = s.id AND u.peran = "guru" AND u.is_aktif = 1), 0) as total_guru,
-         COALESCE((SELECT COUNT(*) FROM users u WHERE u.id_sekolah = s.id AND u.peran = "siswa" AND u.is_aktif = 1), 0) as total_siswa,
+         COALESCE((SELECT COUNT(*) FROM users u WHERE u.id_sekolah = s.id AND u.peran = 'guru' AND u.is_aktif = TRUE), 0) as total_guru,
+         COALESCE((SELECT COUNT(*) FROM users u WHERE u.id_sekolah = s.id AND u.peran = 'siswa' AND u.is_aktif = TRUE), 0) as total_siswa,
          COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.id_sekolah = s.id), 0) as total_instrumen,
-         COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.id_sekolah = s.id AND i.status = "aktif"), 0) as instrumen_aktif,
+         COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.id_sekolah = s.id AND i.status = 'aktif'), 0) as instrumen_aktif,
          COALESCE((SELECT COUNT(*) FROM hasil_siswa hs WHERE hs.id_sekolah = s.id), 0) as total_pengerjaan,
          COALESCE((SELECT ROUND(AVG(hs.nilai), 1) FROM hasil_siswa hs WHERE hs.id_sekolah = s.id), 0) as rata_rata_nilai,
          COALESCE((SELECT ROUND((SUM(CASE WHEN hs.nilai >= 75 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0)) * 100, 1) FROM hasil_siswa hs WHERE hs.id_sekolah = s.id), 0) as ketuntasan
        FROM sekolah s
        ${selectedSchoolWhere}
-       ORDER BY FIELD(s.nama_sekolah, "SMPS Adabiah Padang", "SMPN 12 Padang", "MTsN 6 Padang"), s.nama_sekolah ASC`,
+       ${orderSekolahAliasSql}`,
       selectedSchoolParams
-    );
+    ));
 
-    const [komposisiJenis] = await pool.execute(
+    const orderJenisSql = isPostgres
+      ? `ORDER BY CASE i.jenis WHEN 'Literasi' THEN 1 WHEN 'Numerasi' THEN 2 WHEN 'HOTS' THEN 3 ELSE 4 END, i.jenis`
+      : `ORDER BY FIELD(i.jenis, 'Literasi', 'Numerasi', 'HOTS'), i.jenis`;
+
+    const komposisiJenis = resultRows(await pool.execute(
        `SELECT i.jenis, COUNT(*) as jumlah
        FROM instrumen i
        ${whereSql(instrumenFilter.where)}
        GROUP BY i.jenis
-       ORDER BY FIELD(i.jenis, "Literasi", "Numerasi", "HOTS"), i.jenis`,
+       ${orderJenisSql}`,
       instrumenFilter.params
-    );
+    ));
 
-    const [instrumenTerbaru] = await pool.execute(
+    const instrumenTerbaru = resultRows(await pool.execute(
       `SELECT
          i.id,
          s.nama_sekolah,
@@ -1065,11 +1085,11 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
        ORDER BY i.created_at DESC
        LIMIT 8`,
       instrumenFilter.params
-    );
+    ));
 
-    const aktivitasWhere = selectedSekolahId ? 'WHERE u.id_sekolah = ?' : '';
-    const aktivitasParams = selectedSekolahId ? [selectedSekolahId] : [];
-    const [aktivitas] = await pool.execute(
+    const aktivitasParams = [];
+    const aktivitasWhere = selectedSekolahId ? `WHERE u.id_sekolah = ${addParam(aktivitasParams, selectedSekolahId)}` : '';
+    const aktivitas = resultRows(await pool.execute(
       `SELECT
          al.aksi,
          al.detail,
@@ -1084,7 +1104,7 @@ router.get('/super-admin-dashboard', authenticate, async (req, res) => {
        ORDER BY al.created_at DESC
        LIMIT 8`,
       aktivitasParams
-    );
+    ));
 
     return res.json({
       success: true,
