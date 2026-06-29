@@ -17,6 +17,8 @@ function resultRows(result) {
   return result.rows || result[0] || [];
 }
 
+const nullSafeEq = isPostgres ? 'IS NOT DISTINCT FROM' : '<=>';
+
 function whereSql(where) {
   return where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 }
@@ -274,7 +276,7 @@ async function buildChatbotSiswaQueryParts(user, query = {}) {
     ? 'LEFT JOIN instrumen i ON i.id = ch.instrumen_id'
     : 'LEFT JOIN instrumen i ON 1 = 0';
 
-  const where = ['siswa.peran = "siswa"'];
+  const where = ["siswa.peran = 'siswa'"];
   const params = [];
 
   if (isSuperAdmin(user) || isAdminSekolah(user)) {
@@ -298,10 +300,8 @@ async function buildChatbotSiswaQueryParts(user, query = {}) {
       };
     }
 
-    where.push('i.dibuat_oleh = ?');
-    params.push(user.id);
-    where.push('siswa.id_sekolah = ?');
-    params.push(user.id_sekolah);
+    where.push(`i.dibuat_oleh = ${addParam(params, user.id)}`);
+    where.push(`siswa.id_sekolah = ${addParam(params, user.id_sekolah)}`);
   } else {
     return { ok: false };
   }
@@ -315,28 +315,23 @@ async function buildChatbotSiswaQueryParts(user, query = {}) {
   const search = String(query.search || query.q || '').trim();
 
   if (dateStart) {
-    where.push('DATE(ch.created_at) >= ?');
-    params.push(dateStart);
+    where.push(`DATE(ch.created_at) >= ${addParam(params, dateStart)}`);
   }
 
   if (dateEnd) {
-    where.push('DATE(ch.created_at) <= ?');
-    params.push(dateEnd);
+    where.push(`DATE(ch.created_at) <= ${addParam(params, dateEnd)}`);
   }
 
   if (kelas) {
-    where.push('siswa.kelas = ?');
-    params.push(kelas);
+    where.push(`siswa.kelas = ${addParam(params, kelas)}`);
   }
 
   if (instrumenId && hasInstrumenColumn) {
-    where.push('ch.instrumen_id = ?');
-    params.push(instrumenId);
+    where.push(`ch.instrumen_id = ${addParam(params, instrumenId)}`);
   }
 
   if (siswaId) {
-    where.push('siswa.id = ?');
-    params.push(siswaId);
+    where.push(`siswa.id = ${addParam(params, siswaId)}`);
   }
 
   if (status === 'success') {
@@ -346,8 +341,9 @@ async function buildChatbotSiswaQueryParts(user, query = {}) {
   }
 
   if (search) {
-    where.push('(ch.pesan LIKE ? OR ch.balasan LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`);
+    const searchParam1 = addParam(params, `%${search}%`);
+    const searchParam2 = addParam(params, `%${search}%`);
+    where.push(`(ch.pesan LIKE ${searchParam1} OR ch.balasan LIKE ${searchParam2})`);
   }
 
   const fromSql = `
@@ -535,7 +531,7 @@ async function getExportInstrumenRows(user, requestedSekolahId) {
   const scope = buildInstrumenScope(user, requestedSekolahId);
   if (!scope.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        i.id,
        s.nama_sekolah,
@@ -556,7 +552,7 @@ async function getExportInstrumenRows(user, requestedSekolahId) {
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      LEFT JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
      ${whereSql(scope.where)}
      GROUP BY
        i.id, s.nama_sekolah, i.judul, i.jenis, i.mata_pelajaran,
@@ -564,7 +560,7 @@ async function getExportInstrumenRows(user, requestedSekolahId) {
      ORDER BY total_pengerjaan DESC, i.created_at DESC
      LIMIT 500`,
     scope.params
-  );
+  ));
 
   return rows;
 }
@@ -573,7 +569,7 @@ async function getExportHasilSiswaRows(user, requestedSekolahId) {
   const scope = buildInstrumenScope(user, requestedSekolahId);
   if (!scope.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        s.nama_sekolah,
        siswa.nama as nama_siswa,
@@ -590,17 +586,17 @@ async function getExportHasilSiswaRows(user, requestedSekolahId) {
      FROM hasil_siswa hs
      JOIN instrumen i
        ON i.id = hs.instrumen_id
-      AND i.id_sekolah <=> hs.id_sekolah
+      AND i.id_sekolah ${nullSafeEq} hs.id_sekolah
      JOIN users siswa
        ON siswa.id = hs.siswa_id
-      AND siswa.id_sekolah <=> hs.id_sekolah
+      AND siswa.id_sekolah ${nullSafeEq} hs.id_sekolah
      LEFT JOIN sekolah s ON s.id = hs.id_sekolah
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      ${whereSql(scope.where)}
      ORDER BY COALESCE(hs.waktu_selesai, hs.created_at) DESC
      LIMIT 1000`,
     scope.params
-  );
+  ));
 
   return rows;
 }
@@ -609,7 +605,7 @@ async function getExportAnalisisTipeRows(user, requestedSekolahId) {
   const scope = buildInstrumenScope(user, requestedSekolahId);
   if (!scope.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        s.nama_sekolah,
        i.judul as instrumen,
@@ -621,7 +617,7 @@ async function getExportAnalisisTipeRows(user, requestedSekolahId) {
        COUNT(js.id) as total_jawaban,
        ROUND(AVG(CASE
          WHEN js.id IS NULL THEN NULL
-         WHEN js.is_benar = 1 THEN 100
+         WHEN js.is_benar = ${isPostgres ? 'TRUE' : '1'} THEN 100
          ELSE 0
        END), 1) as rata_rata_persentase_benar
      FROM soal soal
@@ -630,7 +626,7 @@ async function getExportAnalisisTipeRows(user, requestedSekolahId) {
      LEFT JOIN jawaban_siswa js
        ON js.soal_id = soal.id
       AND js.instrumen_id = i.id
-      AND js.id_sekolah <=> i.id_sekolah
+      AND js.id_sekolah ${nullSafeEq} i.id_sekolah
      ${whereSql(scope.where)}
      GROUP BY
        s.nama_sekolah, i.id, i.judul, i.jenis, i.mata_pelajaran,
@@ -638,7 +634,7 @@ async function getExportAnalisisTipeRows(user, requestedSekolahId) {
      ORDER BY rata_rata_persentase_benar ASC, total_jawaban DESC
      LIMIT 500`,
     scope.params
-  );
+  ));
 
   return rows.map(row => ({
     ...row,
@@ -650,7 +646,7 @@ async function getExportChatbotRows(user, query = {}, limit = 1000) {
   const parts = await buildChatbotSiswaQueryParts(user, query);
   if (!parts.ok) return null;
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        ch.id,
        siswa.id as siswa_id,
@@ -667,9 +663,9 @@ async function getExportChatbotRows(user, query = {}, limit = 1000) {
      ${parts.fromSql}
      ${whereSql(parts.where)}
      ORDER BY ch.created_at DESC, ch.id DESC
-     LIMIT ?`,
-    [...parts.params, limit]
-  );
+     LIMIT ${addParam(parts.params, limit)}${isPostgres ? '::int' : ''}`,
+    parts.params
+  ));
 
   return rows.map(row => ({
     ...row,
