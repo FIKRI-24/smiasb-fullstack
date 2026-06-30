@@ -1267,11 +1267,15 @@ router.get('/chatbot-siswa', authenticate, authorize('admin', 'guru'), async (re
     const offset = (page - 1) * limit;
     const where = whereSql(parts.where);
 
-    const [countRows, rows, kelasRows, instrumenRows, siswaRows] = await Promise.all([
+    const listParams = [...parts.params];
+    const limitParam = addParam(listParams, limit);
+    const offsetParam = addParam(listParams, offset);
+
+    const results = await Promise.all([
       pool.execute(
         `SELECT COUNT(*) as total ${parts.fromSql} ${where}`,
         parts.params
-      ).then(result => result[0]),
+      ),
       pool.execute(
         `SELECT
            ch.id,
@@ -1289,16 +1293,16 @@ router.get('/chatbot-siswa', authenticate, authorize('admin', 'guru'), async (re
          ${parts.fromSql}
          ${where}
          ORDER BY ch.created_at DESC, ch.id DESC
-         LIMIT ? OFFSET ?`,
-        [...parts.params, limit, offset]
-      ).then(result => result[0]),
+         LIMIT ${limitParam}${isPostgres ? '::int' : ''} OFFSET ${offsetParam}${isPostgres ? '::int' : ''}`,
+        listParams
+      ),
       pool.execute(
         `SELECT DISTINCT siswa.kelas
          ${parts.fromSql}
          ${where}
          ORDER BY siswa.kelas ASC`,
         parts.params
-      ).then(result => result[0]).catch(() => []),
+      ).catch(() => ({ rows: [] })),
       pool.execute(
         `SELECT DISTINCT ${parts.instrumenIdExpression} as id, i.judul
          ${parts.fromSql}
@@ -1306,15 +1310,21 @@ router.get('/chatbot-siswa', authenticate, authorize('admin', 'guru'), async (re
          AND i.id IS NOT NULL
          ORDER BY i.judul ASC`,
         parts.params
-      ).then(result => result[0]).catch(() => []),
+      ).catch(() => ({ rows: [] })),
       pool.execute(
         `SELECT DISTINCT siswa.id, siswa.nama, siswa.kelas
          ${parts.fromSql}
          ${where}
          ORDER BY siswa.nama ASC`,
         parts.params
-      ).then(result => result[0]).catch(() => [])
+      ).catch(() => ({ rows: [] }))
     ]);
+
+    const countRows = resultRows(results[0]);
+    const rows = resultRows(results[1]);
+    const kelasRows = resultRows(results[2]);
+    const instrumenRows = resultRows(results[3]);
+    const siswaRows = resultRows(results[4]);
 
     const total = numberValue(countRows[0]?.total);
 
@@ -1371,7 +1381,7 @@ router.get('/chatbot-siswa/top-siswa', authenticate, authorize('admin', 'guru'),
     const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
     if (!parts.ok) return denyAccess(res);
 
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          siswa.id as siswa_id,
          siswa.nama as nama_siswa,
@@ -1384,7 +1394,7 @@ router.get('/chatbot-siswa/top-siswa', authenticate, authorize('admin', 'guru'),
        GROUP BY siswa.id, siswa.nama, siswa.kelas, ${parts.instrumenIdExpression}, i.judul
        ORDER BY jumlah DESC, siswa.nama ASC`,
       parts.params
-    );
+    ));
 
     const siswaMap = new Map();
     rows.forEach(row => {
@@ -1429,7 +1439,8 @@ router.get('/chatbot-siswa/top-pertanyaan', authenticate, authorize('admin', 'gu
     const parts = await buildChatbotSiswaQueryParts(req.user, req.query);
     if (!parts.ok) return denyAccess(res);
 
-    const [rows] = await pool.execute(
+    const topPertanyaanParams = [...parts.params];
+    const rows = resultRows(await pool.execute(
       `SELECT
          ch.id,
          ch.pesan as pertanyaan,
@@ -1439,9 +1450,9 @@ router.get('/chatbot-siswa/top-pertanyaan', authenticate, authorize('admin', 'gu
        ${parts.fromSql}
        ${whereSql(parts.where)}
        ORDER BY ch.created_at DESC
-       LIMIT 1000`,
-      parts.params
-    );
+       LIMIT ${addParam(topPertanyaanParams, 1000)}${isPostgres ? '::int' : ''}`,
+      topPertanyaanParams
+    ));
 
     const groups = [];
     rows.forEach(row => {
@@ -1506,7 +1517,8 @@ router.get('/chatbot-siswa/:id', authenticate, authorize('admin', 'guru'), async
       return res.status(400).json({ success: false, message: 'ID chat tidak valid.' });
     }
 
-    const [rows] = await pool.execute(
+    const detailParams = [...parts.params];
+    const rows = resultRows(await pool.execute(
       `SELECT
          ch.id,
          siswa.id as siswa_id,
@@ -1521,9 +1533,9 @@ router.get('/chatbot-siswa/:id', authenticate, authorize('admin', 'guru'), async
          ${parts.errorExpression} as is_error,
          ch.created_at
        ${parts.fromSql}
-       ${whereSql([...parts.where, 'ch.id = ?'])}`,
-      [...parts.params, chatId]
-    );
+       ${whereSql([...parts.where, `ch.id = ${addParam(detailParams, chatId)}`])}`,
+      detailParams
+    ));
 
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Data chat tidak ditemukan.' });
