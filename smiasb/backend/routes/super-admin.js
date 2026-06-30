@@ -9,6 +9,8 @@ const { denyAccess, isSuperAdmin, parseId } = require('../utils/accessControl');
 
 const KKM_DEFAULT = 75;
 const nullSafeEq = isPostgres ? 'IS NOT DISTINCT FROM' : '<=>';
+const LIKE_OPERATOR = isPostgres ? 'ILIKE' : 'LIKE';
+const ACTIVE_USER_SQL = isPostgres ? 'TRUE' : '1';
 const SCHOOL_ORDER_SQL = isPostgres
   ? `CASE s.nama_sekolah WHEN 'SMPS Adabiah Padang' THEN 1 WHEN 'SMPN 12 Padang' THEN 2 WHEN 'MTsN 6 Padang' THEN 3 ELSE 99 END, s.nama_sekolah ASC`
   : `FIELD(s.nama_sekolah, 'SMPS Adabiah Padang', 'SMPN 12 Padang', 'MTsN 6 Padang'), s.nama_sekolah ASC`;
@@ -24,6 +26,15 @@ const SCHOOL_ORDER_CASE_SQL = `
 
 function resultRows(result) {
   return result.rows || result[0] || [];
+}
+
+function insertedId(result) {
+  return isPostgres ? result.rows[0]?.id : result.insertId ?? result[0]?.insertId;
+}
+
+function toDbAktif(value) {
+  const isAktif = Number(value) === 1 || value === true;
+  return isPostgres ? isAktif : (isAktif ? 1 : 0);
 }
 
 function requireSuperAdmin(req, res, next) {
@@ -273,16 +284,20 @@ function toMonitoring(row) {
 }
 
 async function getActiveSekolah(idSekolah) {
-  const [rows] = await pool.execute(
-    'SELECT id, nama_sekolah, status FROM sekolah WHERE id = ? AND status = "aktif"',
-    [idSekolah]
-  );
+  const params = [];
+  const rows = resultRows(await pool.execute(
+    `SELECT id, nama_sekolah, status
+     FROM sekolah
+     WHERE id = ${addParam(params, idSekolah)} AND status = 'aktif'`,
+    params
+  ));
 
   return rows[0] || null;
 }
 
 async function getAdminSekolahById(id) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        u.id,
        u.nama,
@@ -292,19 +307,20 @@ async function getAdminSekolahById(id) {
        u.is_aktif,
        u.created_at,
        s.nama_sekolah,
-       COALESCE((SELECT COUNT(*) FROM users guru WHERE guru.id_sekolah = u.id_sekolah AND guru.peran = "guru" AND guru.is_aktif = 1), 0) as jumlah_guru,
-       COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = u.id_sekolah AND siswa.peran = "siswa" AND siswa.is_aktif = 1), 0) as jumlah_siswa
+       COALESCE((SELECT COUNT(*) FROM users guru WHERE guru.id_sekolah = u.id_sekolah AND guru.peran = 'guru' AND guru.is_aktif = ${ACTIVE_USER_SQL}), 0) as jumlah_guru,
+       COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = u.id_sekolah AND siswa.peran = 'siswa' AND siswa.is_aktif = ${ACTIVE_USER_SQL}), 0) as jumlah_siswa
      FROM users u
      LEFT JOIN sekolah s ON s.id = u.id_sekolah
-     WHERE u.id = ? AND u.peran IN ("admin", "admin_sekolah")`,
-    [id]
-  );
+     WHERE u.id = ${addParam(params, id)} AND u.peran IN ('admin', 'admin_sekolah')`,
+    params
+  ));
 
   return rows[0] || null;
 }
 
 async function getGuruById(id) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        u.id,
        u.nama,
@@ -317,20 +333,21 @@ async function getGuruById(id) {
        u.created_at,
        s.nama_sekolah,
        COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id), 0) as jumlah_instrumen,
-       COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id AND i.status = "aktif"), 0) as jumlah_instrumen_aktif,
+       COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id AND i.status = 'aktif'), 0) as jumlah_instrumen_aktif,
        COALESCE((SELECT COUNT(*) FROM hasil_siswa hs JOIN instrumen i ON i.id = hs.instrumen_id WHERE i.dibuat_oleh = u.id), 0) as total_pengerjaan,
        COALESCE((SELECT ROUND(AVG(hs.nilai), 1) FROM hasil_siswa hs JOIN instrumen i ON i.id = hs.instrumen_id WHERE i.dibuat_oleh = u.id), 0) as rata_rata_nilai_instrumen
      FROM users u
      LEFT JOIN sekolah s ON s.id = u.id_sekolah
-     WHERE u.id = ? AND u.peran = "guru"`,
-    [id]
-  );
+     WHERE u.id = ${addParam(params, id)} AND u.peran = 'guru'`,
+    params
+  ));
 
   return rows[0] || null;
 }
 
 async function getInstrumenTerbaruByGuru(idGuru) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        i.id,
        i.judul,
@@ -342,12 +359,12 @@ async function getInstrumenTerbaruByGuru(idGuru) {
        COALESCE(ROUND(AVG(hs.nilai), 1), 0) as rata_rata_nilai
      FROM instrumen i
      LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id
-     WHERE i.dibuat_oleh = ?
+     WHERE i.dibuat_oleh = ${addParam(params, idGuru)}
      GROUP BY i.id, i.judul, i.jenis, i.kelas, i.status, i.created_at
      ORDER BY i.created_at DESC
      LIMIT 8`,
-    [idGuru]
-  );
+    params
+  ));
 
   return rows.map(item => ({
     ...item,
@@ -357,24 +374,24 @@ async function getInstrumenTerbaruByGuru(idGuru) {
 }
 
 async function identifierExists(identifier, exceptId = null) {
-  const where = ['LOWER(email) = ?'];
-  const params = [identifier.toLowerCase()];
+  const params = [];
+  const where = [`LOWER(email) = ${addParam(params, identifier.toLowerCase())}`];
 
   if (exceptId) {
-    where.push('id <> ?');
-    params.push(exceptId);
+    where.push(`id <> ${addParam(params, exceptId)}`);
   }
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT id FROM users WHERE ${where.join(' AND ')} LIMIT 1`,
     params
-  );
+  ));
 
   return rows.length > 0;
 }
 
 async function getSiswaById(id) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        u.id,
        u.nama,
@@ -392,17 +409,18 @@ async function getSiswaById(id) {
        MAX(COALESCE(hs.waktu_selesai, hs.created_at)) as terakhir_mengerjakan
      FROM users u
      LEFT JOIN sekolah s ON s.id = u.id_sekolah
-     LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah <=> u.id_sekolah
-     WHERE u.id = ? AND u.peran = "siswa"
+     LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah ${nullSafeEq} u.id_sekolah
+     WHERE u.id = ${addParam(params, id)} AND u.peran = 'siswa'
      GROUP BY u.id, u.nama, u.email, u.nis, u.kelas, u.id_sekolah, u.is_aktif, u.created_at, s.nama_sekolah`,
-    [id]
-  );
+    params
+  ));
 
   return rows[0] || null;
 }
 
 async function getRiwayatPengerjaanBySiswa(idSiswa, idSekolah) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        hs.id,
        hs.instrumen_id,
@@ -416,17 +434,18 @@ async function getRiwayatPengerjaanBySiswa(idSiswa, idSekolah) {
        i.kelas
      FROM hasil_siswa hs
      JOIN instrumen i ON i.id = hs.instrumen_id
-     WHERE hs.siswa_id = ? AND hs.id_sekolah <=> ?
+     WHERE hs.siswa_id = ${addParam(params, idSiswa)} AND hs.id_sekolah ${nullSafeEq} ${addParam(params, idSekolah)}
      ORDER BY COALESCE(hs.waktu_selesai, hs.created_at) DESC
      LIMIT 50`,
-    [idSiswa, idSekolah]
-  );
+    params
+  ));
 
   return rows.map(toRiwayatSiswa);
 }
 
 async function getInstrumenByIdForSuperAdmin(id) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        i.id,
        i.judul,
@@ -450,9 +469,9 @@ async function getInstrumenByIdForSuperAdmin(id) {
        COALESCE((
          SELECT COUNT(*)
          FROM users siswa
-         WHERE siswa.peran = "siswa"
-           AND siswa.is_aktif = 1
-           AND siswa.id_sekolah <=> i.id_sekolah
+         WHERE siswa.peran = 'siswa'
+           AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+           AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
            AND siswa.kelas = i.kelas
        ), 0) as jumlah_siswa_kelas,
        COUNT(hs.id) as sudah_mengerjakan,
@@ -460,9 +479,9 @@ async function getInstrumenByIdForSuperAdmin(id) {
          COALESCE((
            SELECT COUNT(*)
            FROM users siswa
-           WHERE siswa.peran = "siswa"
-             AND siswa.is_aktif = 1
-             AND siswa.id_sekolah <=> i.id_sekolah
+           WHERE siswa.peran = 'siswa'
+             AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+             AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
              AND siswa.kelas = i.kelas
          ), 0) - COUNT(DISTINCT hs.siswa_id),
          0
@@ -470,20 +489,21 @@ async function getInstrumenByIdForSuperAdmin(id) {
      FROM instrumen i
      LEFT JOIN sekolah s ON s.id = i.id_sekolah
      LEFT JOIN users u ON u.id = i.dibuat_oleh
-     LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah <=> i.id_sekolah
-     WHERE i.id = ?
+     LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
+     WHERE i.id = ${addParam(params, id)}
      GROUP BY
        i.id, i.judul, i.jenis, i.mata_pelajaran, i.kelas, i.jumlah_soal, i.status,
        i.batas_waktu, i.gunakan_batas_waktu, i.dibuat_oleh, u.nama,
        i.id_sekolah, s.nama_sekolah, i.created_at`,
-    [id]
-  );
+    params
+  ));
 
   return rows[0] || null;
 }
 
 async function getHasilRingkasByInstrumen(idInstrumen, idSekolah) {
-  const [rows] = await pool.execute(
+  const params = [];
+  const rows = resultRows(await pool.execute(
     `SELECT
        hs.id,
        hs.siswa_id,
@@ -498,11 +518,11 @@ async function getHasilRingkasByInstrumen(idInstrumen, idSekolah) {
        hs.created_at
      FROM hasil_siswa hs
      LEFT JOIN users u ON u.id = hs.siswa_id
-     WHERE hs.instrumen_id = ? AND hs.id_sekolah <=> ?
+     WHERE hs.instrumen_id = ${addParam(params, idInstrumen)} AND hs.id_sekolah ${nullSafeEq} ${addParam(params, idSekolah)}
      ORDER BY hs.nilai DESC, COALESCE(hs.waktu_selesai, hs.created_at) ASC
      LIMIT 100`,
-    [idInstrumen, idSekolah]
-  );
+    params
+  ));
 
   return rows.map(toHasilInstrumen);
 }
@@ -1221,42 +1241,40 @@ router.get('/monitoring', authenticate, requireSuperAdmin, async (req, res) => {
     }
 
     if (idSekolah) {
-      where.push('i.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`i.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (jenisFilter.hasValue) {
-      where.push('i.jenis = ?');
-      params.push(jenisFilter.jenis);
+      where.push(`i.jenis = ${addParam(params, jenisFilter.jenis)}`);
     }
 
     if (statusFilter.hasValue) {
-      where.push('i.status = ?');
-      params.push(statusFilter.status);
+      where.push(`i.status = ${addParam(params, statusFilter.status)}`);
     }
 
     if (kelas) {
-      where.push('i.kelas = ?');
-      params.push(kelas);
+      where.push(`i.kelas = ${addParam(params, kelas)}`);
     }
 
     if (guru) {
       if (guruId) {
-        where.push('i.dibuat_oleh = ?');
-        params.push(guruId);
+        where.push(`i.dibuat_oleh = ${addParam(params, guruId)}`);
       } else {
-        where.push('u.nama LIKE ?');
-        params.push(`%${guru}%`);
+        where.push(`u.nama ${LIKE_OPERATOR} ${addParam(params, `%${guru}%`)}`);
       }
     }
 
     if (search) {
-      where.push('(i.judul LIKE ? OR s.nama_sekolah LIKE ? OR u.nama LIKE ? OR i.kelas LIKE ? OR i.mata_pelajaran LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      const p4 = addParam(params, `%${search}%`);
+      const p5 = addParam(params, `%${search}%`);
+      where.push(`(i.judul ${LIKE_OPERATOR} ${p1} OR s.nama_sekolah ${LIKE_OPERATOR} ${p2} OR u.nama ${LIKE_OPERATOR} ${p3} OR i.kelas ${LIKE_OPERATOR} ${p4} OR i.mata_pelajaran ${LIKE_OPERATOR} ${p5})`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          i.id,
          i.judul,
@@ -1273,9 +1291,9 @@ router.get('/monitoring', authenticate, requireSuperAdmin, async (req, res) => {
          COALESCE((
            SELECT COUNT(*)
            FROM users siswa
-           WHERE siswa.peran = "siswa"
-             AND siswa.is_aktif = 1
-             AND siswa.id_sekolah <=> i.id_sekolah
+           WHERE siswa.peran = 'siswa'
+             AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+             AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
              AND siswa.kelas = i.kelas
          ), 0) as jumlah_siswa_kelas,
          COUNT(hs.id) as sudah_mengerjakan,
@@ -1283,9 +1301,9 @@ router.get('/monitoring', authenticate, requireSuperAdmin, async (req, res) => {
            COALESCE((
              SELECT COUNT(*)
              FROM users siswa
-             WHERE siswa.peran = "siswa"
-               AND siswa.is_aktif = 1
-               AND siswa.id_sekolah <=> i.id_sekolah
+             WHERE siswa.peran = 'siswa'
+               AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+               AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
                AND siswa.kelas = i.kelas
            ), 0) - COUNT(DISTINCT hs.siswa_id),
            0
@@ -1299,7 +1317,7 @@ router.get('/monitoring', authenticate, requireSuperAdmin, async (req, res) => {
        FROM instrumen i
        LEFT JOIN sekolah s ON s.id = i.id_sekolah
        LEFT JOIN users u ON u.id = i.dibuat_oleh
-       LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah <=> i.id_sekolah
+       LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
        ${whereSql}
        GROUP BY
          i.id, i.judul, i.jenis, i.mata_pelajaran, i.kelas, i.status,
@@ -1310,7 +1328,7 @@ router.get('/monitoring', authenticate, requireSuperAdmin, async (req, res) => {
          MAX(COALESCE(hs.waktu_selesai, hs.created_at)) DESC,
          i.created_at DESC`,
       params
-    );
+    ));
 
     return res.json({ success: true, data: rows.map(toMonitoring) });
   } catch (err) {
@@ -1345,42 +1363,40 @@ router.get('/instrumen', authenticate, requireSuperAdmin, async (req, res) => {
     }
 
     if (idSekolah) {
-      where.push('i.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`i.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (jenisFilter.hasValue) {
-      where.push('i.jenis = ?');
-      params.push(jenisFilter.jenis);
+      where.push(`i.jenis = ${addParam(params, jenisFilter.jenis)}`);
     }
 
     if (statusFilter.hasValue) {
-      where.push('i.status = ?');
-      params.push(statusFilter.status);
+      where.push(`i.status = ${addParam(params, statusFilter.status)}`);
     }
 
     if (kelas) {
-      where.push('i.kelas = ?');
-      params.push(kelas);
+      where.push(`i.kelas = ${addParam(params, kelas)}`);
     }
 
     if (guru) {
       if (guruId) {
-        where.push('i.dibuat_oleh = ?');
-        params.push(guruId);
+        where.push(`i.dibuat_oleh = ${addParam(params, guruId)}`);
       } else {
-        where.push('u.nama LIKE ?');
-        params.push(`%${guru}%`);
+        where.push(`u.nama ${LIKE_OPERATOR} ${addParam(params, `%${guru}%`)}`);
       }
     }
 
     if (search) {
-      where.push('(i.judul LIKE ? OR i.mata_pelajaran LIKE ? OR i.kelas LIKE ? OR u.nama LIKE ? OR s.nama_sekolah LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      const p4 = addParam(params, `%${search}%`);
+      const p5 = addParam(params, `%${search}%`);
+      where.push(`(i.judul ${LIKE_OPERATOR} ${p1} OR i.mata_pelajaran ${LIKE_OPERATOR} ${p2} OR i.kelas ${LIKE_OPERATOR} ${p3} OR u.nama ${LIKE_OPERATOR} ${p4} OR s.nama_sekolah ${LIKE_OPERATOR} ${p5})`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          i.id,
          i.judul,
@@ -1404,9 +1420,9 @@ router.get('/instrumen', authenticate, requireSuperAdmin, async (req, res) => {
          COALESCE((
            SELECT COUNT(*)
            FROM users siswa
-           WHERE siswa.peran = "siswa"
-             AND siswa.is_aktif = 1
-             AND siswa.id_sekolah <=> i.id_sekolah
+           WHERE siswa.peran = 'siswa'
+             AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+             AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
              AND siswa.kelas = i.kelas
          ), 0) as jumlah_siswa_kelas,
          COUNT(hs.id) as sudah_mengerjakan,
@@ -1414,9 +1430,9 @@ router.get('/instrumen', authenticate, requireSuperAdmin, async (req, res) => {
            COALESCE((
              SELECT COUNT(*)
              FROM users siswa
-             WHERE siswa.peran = "siswa"
-               AND siswa.is_aktif = 1
-               AND siswa.id_sekolah <=> i.id_sekolah
+             WHERE siswa.peran = 'siswa'
+               AND siswa.is_aktif = ${ACTIVE_USER_SQL}
+               AND siswa.id_sekolah ${nullSafeEq} i.id_sekolah
                AND siswa.kelas = i.kelas
            ), 0) - COUNT(DISTINCT hs.siswa_id),
            0
@@ -1424,7 +1440,7 @@ router.get('/instrumen', authenticate, requireSuperAdmin, async (req, res) => {
        FROM instrumen i
        LEFT JOIN sekolah s ON s.id = i.id_sekolah
        LEFT JOIN users u ON u.id = i.dibuat_oleh
-       LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah <=> i.id_sekolah
+       LEFT JOIN hasil_siswa hs ON hs.instrumen_id = i.id AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
        ${whereSql}
        GROUP BY
          i.id, i.judul, i.jenis, i.mata_pelajaran, i.kelas, i.jumlah_soal, i.status,
@@ -1435,7 +1451,7 @@ router.get('/instrumen', authenticate, requireSuperAdmin, async (req, res) => {
          ${SCHOOL_ORDER_CASE_SQL},
          i.created_at DESC`,
       params
-    );
+    ));
 
     return res.json({ success: true, data: rows.map(toInstrumen) });
   } catch (err) {
@@ -1474,8 +1490,8 @@ router.get('/siswa', authenticate, requireSuperAdmin, async (req, res) => {
     const kelas = normalizeText(req.query.kelas);
     const search = normalizeText(req.query.search);
     const statusFilter = parseStatusFilter(req.query.status);
-    const where = ['u.peran = "siswa"'];
     const params = [];
+    const where = ["u.peran = 'siswa'"];
 
     if (rawSekolahId !== undefined && rawSekolahId !== null && rawSekolahId !== '' && !idSekolah) {
       return res.status(400).json({ success: false, message: 'ID sekolah tidak valid.' });
@@ -1486,26 +1502,25 @@ router.get('/siswa', authenticate, requireSuperAdmin, async (req, res) => {
     }
 
     if (idSekolah) {
-      where.push('u.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`u.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (kelas) {
-      where.push('u.kelas = ?');
-      params.push(kelas);
+      where.push(`u.kelas = ${addParam(params, kelas)}`);
     }
 
     if (statusFilter.hasValue) {
-      where.push('u.is_aktif = ?');
-      params.push(statusFilter.isAktif);
+      where.push(`u.is_aktif = ${addParam(params, toDbAktif(statusFilter.isAktif))}`);
     }
 
     if (search) {
-      where.push('(u.nama LIKE ? OR u.email LIKE ? OR u.nis LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      where.push(`(u.nama ${LIKE_OPERATOR} ${p1} OR u.email ${LIKE_OPERATOR} ${p2} OR u.nis ${LIKE_OPERATOR} ${p3})`);
     }
 
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          u.id,
          u.nama,
@@ -1523,17 +1538,17 @@ router.get('/siswa', authenticate, requireSuperAdmin, async (req, res) => {
          MAX(COALESCE(hs.waktu_selesai, hs.created_at)) as terakhir_mengerjakan
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
-       LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah <=> u.id_sekolah
+       LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah ${nullSafeEq} u.id_sekolah
        WHERE ${where.join(' AND ')}
        GROUP BY u.id, u.nama, u.email, u.nis, u.kelas, u.id_sekolah, u.is_aktif, u.created_at, s.nama_sekolah
        ORDER BY
          CASE WHEN u.id_sekolah IS NULL THEN 1 ELSE 0 END,
          ${SCHOOL_ORDER_CASE_SQL},
-         CASE WHEN u.kelas IS NULL OR u.kelas = "" THEN 1 ELSE 0 END,
+         CASE WHEN u.kelas IS NULL OR u.kelas = '' THEN 1 ELSE 0 END,
          u.kelas ASC,
          u.nama ASC`,
       params
-    );
+    ));
 
     return res.json({ success: true, data: rows.map(toSiswa) });
   } catch (err) {
@@ -1549,8 +1564,8 @@ router.get('/siswa/kelas-summary', authenticate, requireSuperAdmin, async (req, 
     const kelas = normalizeText(req.query.kelas);
     const search = normalizeText(req.query.search);
     const statusFilter = parseStatusFilter(req.query.status);
-    const where = ['u.peran = "siswa"'];
     const params = [];
+    const where = ["u.peran = 'siswa'"];
 
     if (rawSekolahId !== undefined && rawSekolahId !== null && rawSekolahId !== '' && !idSekolah) {
       return res.status(400).json({ success: false, message: 'ID sekolah tidak valid.' });
@@ -1561,46 +1576,45 @@ router.get('/siswa/kelas-summary', authenticate, requireSuperAdmin, async (req, 
     }
 
     if (idSekolah) {
-      where.push('u.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`u.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (kelas) {
-      where.push('u.kelas = ?');
-      params.push(kelas);
+      where.push(`u.kelas = ${addParam(params, kelas)}`);
     }
 
     if (statusFilter.hasValue) {
-      where.push('u.is_aktif = ?');
-      params.push(statusFilter.isAktif);
+      where.push(`u.is_aktif = ${addParam(params, toDbAktif(statusFilter.isAktif))}`);
     }
 
     if (search) {
-      where.push('(u.nama LIKE ? OR u.email LIKE ? OR u.nis LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      where.push(`(u.nama ${LIKE_OPERATOR} ${p1} OR u.email ${LIKE_OPERATOR} ${p2} OR u.nis ${LIKE_OPERATOR} ${p3})`);
     }
 
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          s.id as id_sekolah,
          s.nama_sekolah,
          u.kelas,
          COUNT(DISTINCT u.id) as jumlah_siswa,
-         COUNT(DISTINCT CASE WHEN u.is_aktif = 1 THEN u.id END) as jumlah_siswa_aktif,
+         COUNT(DISTINCT CASE WHEN u.is_aktif = ${ACTIVE_USER_SQL} THEN u.id END) as jumlah_siswa_aktif,
          COUNT(hs.id) as jumlah_pengerjaan,
          ROUND(AVG(hs.nilai), 1) as rata_rata_nilai
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
-       LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah <=> u.id_sekolah
+       LEFT JOIN hasil_siswa hs ON hs.siswa_id = u.id AND hs.id_sekolah ${nullSafeEq} u.id_sekolah
        WHERE ${where.join(' AND ')}
        GROUP BY s.id, s.nama_sekolah, u.kelas
        ORDER BY
          CASE WHEN s.id IS NULL THEN 1 ELSE 0 END,
          ${SCHOOL_ORDER_CASE_SQL},
-         CASE WHEN u.kelas IS NULL OR u.kelas = "" THEN 1 ELSE 0 END,
+         CASE WHEN u.kelas IS NULL OR u.kelas = '' THEN 1 ELSE 0 END,
          u.kelas ASC`,
       params
-    );
+    ));
 
     return res.json({
       success: true,
@@ -1649,24 +1663,26 @@ router.get('/guru', authenticate, requireSuperAdmin, async (req, res) => {
     const rawSekolahId = req.query.id_sekolah;
     const idSekolah = parseId(rawSekolahId);
     const search = normalizeText(req.query.search);
-    const where = ['u.peran = "guru"'];
     const params = [];
+    const where = ["u.peran = 'guru'"];
 
     if (rawSekolahId !== undefined && rawSekolahId !== null && rawSekolahId !== '' && !idSekolah) {
       return res.status(400).json({ success: false, message: 'ID sekolah tidak valid.' });
     }
 
     if (idSekolah) {
-      where.push('u.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`u.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (search) {
-      where.push('(u.nama LIKE ? OR u.email LIKE ? OR u.mata_pelajaran LIKE ? OR s.nama_sekolah LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      const p4 = addParam(params, `%${search}%`);
+      where.push(`(u.nama ${LIKE_OPERATOR} ${p1} OR u.email ${LIKE_OPERATOR} ${p2} OR u.mata_pelajaran ${LIKE_OPERATOR} ${p3} OR s.nama_sekolah ${LIKE_OPERATOR} ${p4})`);
     }
 
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          u.id,
          u.nama,
@@ -1679,7 +1695,7 @@ router.get('/guru', authenticate, requireSuperAdmin, async (req, res) => {
          u.created_at,
          s.nama_sekolah,
          COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id), 0) as jumlah_instrumen,
-         COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id AND i.status = "aktif"), 0) as jumlah_instrumen_aktif,
+         COALESCE((SELECT COUNT(*) FROM instrumen i WHERE i.dibuat_oleh = u.id AND i.status = 'aktif'), 0) as jumlah_instrumen_aktif,
          COALESCE((SELECT COUNT(*) FROM hasil_siswa hs JOIN instrumen i ON i.id = hs.instrumen_id WHERE i.dibuat_oleh = u.id), 0) as total_pengerjaan,
          COALESCE((SELECT ROUND(AVG(hs.nilai), 1) FROM hasil_siswa hs JOIN instrumen i ON i.id = hs.instrumen_id WHERE i.dibuat_oleh = u.id), 0) as rata_rata_nilai_instrumen
        FROM users u
@@ -1687,7 +1703,7 @@ router.get('/guru', authenticate, requireSuperAdmin, async (req, res) => {
        WHERE ${where.join(' AND ')}
        ORDER BY CASE WHEN u.id_sekolah IS NULL THEN 1 ELSE 0 END, ${SCHOOL_ORDER_CASE_SQL}, u.nama ASC`,
       params
-    );
+    ));
 
     return res.json({ success: true, data: rows.map(toGuru) });
   } catch (err) {
@@ -1723,20 +1739,21 @@ router.get('/admin-sekolah', authenticate, requireSuperAdmin, async (req, res) =
   try {
     const idSekolah = parseId(req.query.id_sekolah);
     const search = normalizeText(req.query.search);
-    const where = ['u.peran IN ("admin", "admin_sekolah")'];
     const params = [];
+    const where = ["u.peran IN ('admin', 'admin_sekolah')"];
 
     if (idSekolah) {
-      where.push('u.id_sekolah = ?');
-      params.push(idSekolah);
+      where.push(`u.id_sekolah = ${addParam(params, idSekolah)}`);
     }
 
     if (search) {
-      where.push('(u.nama LIKE ? OR u.email LIKE ? OR s.nama_sekolah LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      const p1 = addParam(params, `%${search}%`);
+      const p2 = addParam(params, `%${search}%`);
+      const p3 = addParam(params, `%${search}%`);
+      where.push(`(u.nama ${LIKE_OPERATOR} ${p1} OR u.email ${LIKE_OPERATOR} ${p2} OR s.nama_sekolah ${LIKE_OPERATOR} ${p3})`);
     }
 
-    const [rows] = await pool.execute(
+    const rows = resultRows(await pool.execute(
       `SELECT
          u.id,
          u.nama,
@@ -1746,14 +1763,14 @@ router.get('/admin-sekolah', authenticate, requireSuperAdmin, async (req, res) =
          u.is_aktif,
          u.created_at,
          s.nama_sekolah,
-         COALESCE((SELECT COUNT(*) FROM users guru WHERE guru.id_sekolah = u.id_sekolah AND guru.peran = "guru" AND guru.is_aktif = 1), 0) as jumlah_guru,
-         COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = u.id_sekolah AND siswa.peran = "siswa" AND siswa.is_aktif = 1), 0) as jumlah_siswa
+         COALESCE((SELECT COUNT(*) FROM users guru WHERE guru.id_sekolah = u.id_sekolah AND guru.peran = 'guru' AND guru.is_aktif = ${ACTIVE_USER_SQL}), 0) as jumlah_guru,
+         COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = u.id_sekolah AND siswa.peran = 'siswa' AND siswa.is_aktif = ${ACTIVE_USER_SQL}), 0) as jumlah_siswa
        FROM users u
        LEFT JOIN sekolah s ON s.id = u.id_sekolah
        WHERE ${where.join(' AND ')}
        ORDER BY ${SCHOOL_ORDER_SQL}, u.nama ASC`,
       params
-    );
+    ));
 
     return res.json({ success: true, data: rows.map(toAdminSekolah) });
   } catch (err) {
@@ -1787,14 +1804,15 @@ router.post('/admin-sekolah', authenticate, requireSuperAdmin, [
     }
 
     const hashed = await bcrypt.hash(req.body.password, 10);
-    const [result] = await pool.execute(
+    const insertParams = [];
+    const result = await pool.execute(
       `INSERT INTO users
        (nama, email, password, peran, mata_pelajaran, nip, kelas, nis, id_sekolah, is_aktif)
-       VALUES (?, ?, ?, "admin_sekolah", NULL, NULL, NULL, NULL, ?, ?)`,
-      [nama, identifier, hashed, idSekolah, isAktif]
+       VALUES (${addParam(insertParams, nama)}, ${addParam(insertParams, identifier)}, ${addParam(insertParams, hashed)}, 'admin_sekolah', NULL, NULL, NULL, NULL, ${addParam(insertParams, idSekolah)}, ${addParam(insertParams, toDbAktif(isAktif))})${isPostgres ? ' RETURNING id' : ''}`,
+      insertParams
     );
 
-    const admin = await getAdminSekolahById(result.insertId);
+    const admin = await getAdminSekolahById(insertedId(result));
     return res.status(201).json({
       success: true,
       message: 'Admin sekolah berhasil ditambahkan.',
@@ -1834,9 +1852,16 @@ router.put('/admin-sekolah/:id', authenticate, requireSuperAdmin, [
       return res.status(409).json({ success: false, message: 'Email/username sudah digunakan.' });
     }
 
+    const params = [];
     await pool.execute(
-      'UPDATE users SET nama = ?, email = ?, id_sekolah = ?, is_aktif = ? WHERE id = ? AND peran IN ("admin", "admin_sekolah")',
-      [nama, identifier, idSekolah, isAktif, id]
+      `UPDATE users
+       SET nama = ${addParam(params, nama)},
+           email = ${addParam(params, identifier)},
+           id_sekolah = ${addParam(params, idSekolah)},
+           is_aktif = ${addParam(params, toDbAktif(isAktif))}
+       WHERE id = ${addParam(params, id)}
+         AND peran IN ('admin', 'admin_sekolah')`,
+      params
     );
 
     const admin = await getAdminSekolahById(id);
@@ -1860,9 +1885,13 @@ router.patch('/admin-sekolah/:id/reset-password', authenticate, requireSuperAdmi
     if (!existing) return res.status(404).json({ success: false, message: 'Admin sekolah tidak ditemukan.' });
 
     const hashed = await bcrypt.hash(req.body.password_baru, 10);
+    const params = [];
     await pool.execute(
-      'UPDATE users SET password = ? WHERE id = ? AND peran IN ("admin", "admin_sekolah")',
-      [hashed, id]
+      `UPDATE users
+       SET password = ${addParam(params, hashed)}
+       WHERE id = ${addParam(params, id)}
+         AND peran IN ('admin', 'admin_sekolah')`,
+      params
     );
 
     return res.json({ success: true, message: 'Password admin sekolah berhasil direset.' });
@@ -1890,9 +1919,13 @@ router.patch('/admin-sekolah/:id/status', authenticate, requireSuperAdmin, [
     const nextStatus = req.body.status || (Number(existing.is_aktif) === 1 ? 'nonaktif' : 'aktif');
     const isAktif = nextStatus === 'aktif' ? 1 : 0;
 
+    const params = [];
     await pool.execute(
-      'UPDATE users SET is_aktif = ? WHERE id = ? AND peran IN ("admin", "admin_sekolah")',
-      [isAktif, id]
+      `UPDATE users
+       SET is_aktif = ${addParam(params, toDbAktif(isAktif))}
+       WHERE id = ${addParam(params, id)}
+         AND peran IN ('admin', 'admin_sekolah')`,
+      params
     );
 
     const admin = await getAdminSekolahById(id);
