@@ -7,6 +7,7 @@ import {
   Filter,
   Layers,
   Search,
+  UserRound,
   Users
 } from "lucide-react";
 import ActionIcon from "../components/ActionIcon";
@@ -254,6 +255,7 @@ const MonitoringListPage = () => {
                 <div className="monitoring-list-card-meta">
                   <span><BookOpen size={14} /> {item.mata_pelajaran || "-"}</span>
                   <span><Users size={14} /> Kelas {item.kelas || "-"}</span>
+                  <span><UserRound size={14} /> Guru Pembuat: {item.pembuat || "-"}</span>
                 </div>
 
                 <div className="monitoring-list-card-stats">

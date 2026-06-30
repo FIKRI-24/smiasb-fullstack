@@ -12,6 +12,7 @@ import {
   Medal,
   Target,
   TrendingDown,
+  UserRound,
   UserX,
   Users,
   X
@@ -538,6 +539,7 @@ export default function MonitoringPage() {
           </div>
           <div className="monitoring-hero-meta">
             <span><FileText size={14} /> {instrumen?.jenis || "Instrumen"}</span>
+            <span><UserRound size={14} /> Guru Pembuat: {instrumen?.pembuat || "-"}</span>
             <span><Target size={14} /> KKM {PASSING_SCORE}</span>
             <span><Users size={14} /> {totalSiswa} peserta</span>
             <span><CheckCircle2 size={14} /> {progressStatusText}</span>
