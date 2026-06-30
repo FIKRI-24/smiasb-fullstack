@@ -3,21 +3,28 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const XLSX = require('xlsx');
 const { body, validationResult } = require('express-validator');
-const { pool } = require('../config/database');
+const { pool, isPostgres, addParam } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const { denyAccess, isSuperAdmin, parseId } = require('../utils/accessControl');
 
 const KKM_DEFAULT = 75;
-const SCHOOL_ORDER_SQL = 'FIELD(s.nama_sekolah, "SMPS Adabiah Padang", "SMPN 12 Padang", "MTsN 6 Padang"), s.nama_sekolah ASC';
+const nullSafeEq = isPostgres ? 'IS NOT DISTINCT FROM' : '<=>';
+const SCHOOL_ORDER_SQL = isPostgres
+  ? `CASE s.nama_sekolah WHEN 'SMPS Adabiah Padang' THEN 1 WHEN 'SMPN 12 Padang' THEN 2 WHEN 'MTsN 6 Padang' THEN 3 ELSE 99 END, s.nama_sekolah ASC`
+  : `FIELD(s.nama_sekolah, 'SMPS Adabiah Padang', 'SMPN 12 Padang', 'MTsN 6 Padang'), s.nama_sekolah ASC`;
 const SCHOOL_ORDER_CASE_SQL = `
   CASE s.nama_sekolah
-    WHEN "SMPS Adabiah Padang" THEN 1
-    WHEN "SMPN 12 Padang" THEN 2
-    WHEN "MTsN 6 Padang" THEN 3
+    WHEN 'SMPS Adabiah Padang' THEN 1
+    WHEN 'SMPN 12 Padang' THEN 2
+    WHEN 'MTsN 6 Padang' THEN 3
     ELSE 99
   END,
   s.nama_sekolah ASC
 `;
+
+function resultRows(result) {
+  return result.rows || result[0] || [];
+}
 
 function requireSuperAdmin(req, res, next) {
   if (!isSuperAdmin(req.user)) return denyAccess(res);
@@ -504,6 +511,10 @@ function buildWhereSql(where) {
   return where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 }
 
+function ketuntasanSql(alias = 'hs') {
+  return `ROUND((SUM(CASE WHEN ${alias}.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(${alias}.id), 0)), 1)`;
+}
+
 function numberValue(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -592,59 +603,48 @@ function addLaporanInstrumentFilters(filters, where, params, aliases = {}) {
   const guruAlias = aliases.guru || 'u';
 
   if (filters.idSekolah) {
-    where.push(`${instrumenAlias}.id_sekolah = ?`);
-    params.push(filters.idSekolah);
+    where.push(`${instrumenAlias}.id_sekolah = ${addParam(params, filters.idSekolah)}`);
   }
 
   if (filters.jenis) {
-    where.push(`${instrumenAlias}.jenis = ?`);
-    params.push(filters.jenis);
+    where.push(`${instrumenAlias}.jenis = ${addParam(params, filters.jenis)}`);
   }
 
   if (filters.status) {
-    where.push(`${instrumenAlias}.status = ?`);
-    params.push(filters.status);
+    where.push(`${instrumenAlias}.status = ${addParam(params, filters.status)}`);
   }
 
   if (filters.kelas) {
-    where.push(`${instrumenAlias}.kelas = ?`);
-    params.push(filters.kelas);
+    where.push(`${instrumenAlias}.kelas = ${addParam(params, filters.kelas)}`);
   }
 
   if (filters.guru) {
     if (filters.guruId) {
-      where.push(`${instrumenAlias}.dibuat_oleh = ?`);
-      params.push(filters.guruId);
+      where.push(`${instrumenAlias}.dibuat_oleh = ${addParam(params, filters.guruId)}`);
     } else {
-      where.push(`${guruAlias}.nama LIKE ?`);
-      params.push(`%${filters.guru}%`);
+      where.push(`${guruAlias}.nama LIKE ${addParam(params, `%${filters.guru}%`)}`);
     }
   }
 
   if (filters.search) {
-    where.push(`(${instrumenAlias}.judul LIKE ? OR ${sekolahAlias}.nama_sekolah LIKE ? OR ${guruAlias}.nama LIKE ? OR ${instrumenAlias}.kelas LIKE ? OR ${instrumenAlias}.mata_pelajaran LIKE ?)`);
-    params.push(
-      `%${filters.search}%`,
-      `%${filters.search}%`,
-      `%${filters.search}%`,
-      `%${filters.search}%`,
-      `%${filters.search}%`
-    );
+    const p1 = addParam(params, `%${filters.search}%`);
+    const p2 = addParam(params, `%${filters.search}%`);
+    const p3 = addParam(params, `%${filters.search}%`);
+    const p4 = addParam(params, `%${filters.search}%`);
+    const p5 = addParam(params, `%${filters.search}%`);
+    where.push(`(${instrumenAlias}.judul LIKE ${p1} OR ${sekolahAlias}.nama_sekolah LIKE ${p2} OR ${guruAlias}.nama LIKE ${p3} OR ${instrumenAlias}.kelas LIKE ${p4} OR ${instrumenAlias}.mata_pelajaran LIKE ${p5})`);
   }
 }
 
-function getLaporanDateParts(filters, alias = 'hs') {
+function getLaporanDateParts(filters, alias = 'hs', params = []) {
   const where = [];
-  const params = [];
 
   if (filters.tanggalMulai) {
-    where.push(`COALESCE(${alias}.waktu_selesai, ${alias}.created_at) >= ?`);
-    params.push(`${filters.tanggalMulai} 00:00:00`);
+    where.push(`COALESCE(${alias}.waktu_selesai, ${alias}.created_at) >= ${addParam(params, `${filters.tanggalMulai} 00:00:00`)}`);
   }
 
   if (filters.tanggalSelesai) {
-    where.push(`COALESCE(${alias}.waktu_selesai, ${alias}.created_at) <= ?`);
-    params.push(`${filters.tanggalSelesai} 23:59:59`);
+    where.push(`COALESCE(${alias}.waktu_selesai, ${alias}.created_at) <= ${addParam(params, `${filters.tanggalSelesai} 23:59:59`)}`);
   }
 
   return {
@@ -655,9 +655,8 @@ function getLaporanDateParts(filters, alias = 'hs') {
 }
 
 function addLaporanDateWhere(filters, where, params, alias = 'hs') {
-  const dateParts = getLaporanDateParts(filters, alias);
+  const dateParts = getLaporanDateParts(filters, alias, params);
   where.push(...dateParts.where);
-  params.push(...dateParts.params);
 }
 
 function getTipeSoalCategory(value) {
@@ -745,18 +744,18 @@ function toAnalisisTipe(row) {
 
 async function queryLaporanSummary(filters) {
   const where = [];
-  const whereParams = [];
-  const dateParts = getLaporanDateParts(filters, 'hs');
+  const params = [];
+  const dateParts = getLaporanDateParts(filters, 'hs', params);
 
-  addLaporanInstrumentFilters(filters, where, whereParams, { instrumen: 'i', sekolah: 's', guru: 'guru' });
+  addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        COUNT(DISTINCT i.id) as total_instrumen,
-       COUNT(DISTINCT CASE WHEN i.status = "aktif" THEN i.id END) as total_instrumen_aktif,
+       COUNT(DISTINCT CASE WHEN i.status = 'aktif' THEN i.id END) as total_instrumen_aktif,
        COUNT(hs.id) as total_pengerjaan,
        ROUND(AVG(hs.nilai), 1) as rata_rata_nilai,
-       ROUND((SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) / NULLIF(COUNT(hs.id), 0)) * 100, 1) as ketuntasan,
+       ${ketuntasanSql('hs')} as ketuntasan,
        SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) as siswa_tuntas,
        SUM(CASE WHEN hs.id IS NOT NULL AND hs.nilai < ${KKM_DEFAULT} THEN 1 ELSE 0 END) as siswa_belum_tuntas
      FROM instrumen i
@@ -764,37 +763,34 @@ async function queryLaporanSummary(filters) {
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      LEFT JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
       ${dateParts.joinSql}
      ${buildWhereSql(where)}`,
-    [...dateParts.params, ...whereParams]
-  );
+    params
+  ));
 
   return rows[0] || {};
 }
 
 async function queryRekapSekolah(filters) {
-  const selectParams = [];
   const where = [];
-  const whereParams = [];
-  const dateParts = getLaporanDateParts(filters, 'hs');
-  const siswaKelasSql = filters.kelas ? ' AND siswa.kelas = ?' : '';
+  const params = [];
+  const siswaKelasSql = filters.kelas ? ` AND siswa.kelas = ${addParam(params, filters.kelas)}` : '';
+  const dateParts = getLaporanDateParts(filters, 'hs', params);
 
-  if (filters.kelas) selectParams.push(filters.kelas);
+  addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
 
-  addLaporanInstrumentFilters(filters, where, whereParams, { instrumen: 'i', sekolah: 's', guru: 'guru' });
-
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        s.id,
        s.nama_sekolah,
-       COALESCE((SELECT COUNT(*) FROM users guru_count WHERE guru_count.id_sekolah = s.id AND guru_count.peran = "guru" AND guru_count.is_aktif = 1), 0) as jumlah_guru,
-       COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = s.id AND siswa.peran = "siswa" AND siswa.is_aktif = 1${siswaKelasSql}), 0) as jumlah_siswa,
+       COALESCE((SELECT COUNT(*) FROM users guru_count WHERE guru_count.id_sekolah = s.id AND guru_count.peran = 'guru' AND guru_count.is_aktif = TRUE), 0) as jumlah_guru,
+       COALESCE((SELECT COUNT(*) FROM users siswa WHERE siswa.id_sekolah = s.id AND siswa.peran = 'siswa' AND siswa.is_aktif = TRUE${siswaKelasSql}), 0) as jumlah_siswa,
        COUNT(DISTINCT i.id) as jumlah_instrumen,
-       COUNT(DISTINCT CASE WHEN i.status = "aktif" THEN i.id END) as instrumen_aktif,
+       COUNT(DISTINCT CASE WHEN i.status = 'aktif' THEN i.id END) as instrumen_aktif,
        COUNT(hs.id) as total_pengerjaan,
        ROUND(AVG(hs.nilai), 1) as rata_rata_nilai,
-       ROUND((SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) / NULLIF(COUNT(hs.id), 0)) * 100, 1) as ketuntasan,
+       ${ketuntasanSql('hs')} as ketuntasan,
        SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) as siswa_tuntas,
        SUM(CASE WHEN hs.id IS NOT NULL AND hs.nilai < ${KKM_DEFAULT} THEN 1 ELSE 0 END) as siswa_belum_tuntas
      FROM sekolah s
@@ -802,25 +798,25 @@ async function queryRekapSekolah(filters) {
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      LEFT JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
       ${dateParts.joinSql}
      ${buildWhereSql(where)}
      GROUP BY s.id, s.nama_sekolah
      ORDER BY ${SCHOOL_ORDER_SQL}`,
-    [...selectParams, ...dateParts.params, ...whereParams]
-  );
+    params
+  ));
 
   return rows.map(toRekapSekolah);
 }
 
 async function queryRekapInstrumen(filters) {
   const where = [];
-  const whereParams = [];
-  const dateParts = getLaporanDateParts(filters, 'hs');
+  const params = [];
+  const dateParts = getLaporanDateParts(filters, 'hs', params);
 
-  addLaporanInstrumentFilters(filters, where, whereParams, { instrumen: 'i', sekolah: 's', guru: 'guru' });
+  addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        i.id,
        i.id_sekolah,
@@ -835,7 +831,7 @@ async function queryRekapInstrumen(filters) {
        i.jumlah_soal,
        COUNT(hs.id) as total_pengerjaan,
        ROUND(AVG(hs.nilai), 1) as rata_rata_nilai,
-       ROUND((SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) / NULLIF(COUNT(hs.id), 0)) * 100, 1) as ketuntasan,
+       ${ketuntasanSql('hs')} as ketuntasan,
        MAX(hs.nilai) as nilai_tertinggi,
        MIN(hs.nilai) as nilai_terendah
      FROM instrumen i
@@ -843,18 +839,18 @@ async function queryRekapInstrumen(filters) {
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      LEFT JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
       ${dateParts.joinSql}
      ${buildWhereSql(where)}
      GROUP BY
        i.id, i.id_sekolah, s.nama_sekolah, i.judul, i.jenis, i.mata_pelajaran,
-       i.kelas, i.dibuat_oleh, guru.nama, i.status, i.jumlah_soal
+       i.kelas, i.dibuat_oleh, guru.nama, i.status, i.jumlah_soal, i.created_at
      ORDER BY
        CASE WHEN i.id_sekolah IS NULL THEN 1 ELSE 0 END,
        ${SCHOOL_ORDER_CASE_SQL},
        i.created_at DESC`,
-    [...dateParts.params, ...whereParams]
-  );
+    params
+  ));
 
   return rows.map(toRekapInstrumen);
 }
@@ -866,7 +862,7 @@ async function queryRekapSiswa(filters) {
   addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
   addLaporanDateWhere(filters, where, params, 'hs');
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        siswa.id as id_siswa,
        siswa.id_sekolah,
@@ -880,10 +876,10 @@ async function queryRekapSiswa(filters) {
      FROM hasil_siswa hs
      JOIN users siswa
        ON siswa.id = hs.siswa_id
-      AND siswa.id_sekolah <=> hs.id_sekolah
+      AND siswa.id_sekolah ${nullSafeEq} hs.id_sekolah
      JOIN instrumen i
        ON i.id = hs.instrumen_id
-      AND i.id_sekolah <=> hs.id_sekolah
+      AND i.id_sekolah ${nullSafeEq} hs.id_sekolah
      LEFT JOIN sekolah s ON s.id = hs.id_sekolah
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      ${buildWhereSql(where)}
@@ -891,31 +887,33 @@ async function queryRekapSiswa(filters) {
      ORDER BY
        CASE WHEN siswa.id_sekolah IS NULL THEN 1 ELSE 0 END,
        ${SCHOOL_ORDER_CASE_SQL},
-       CASE WHEN siswa.kelas IS NULL OR siswa.kelas = "" THEN 1 ELSE 0 END,
+       CASE WHEN siswa.kelas IS NULL OR siswa.kelas = '' THEN 1 ELSE 0 END,
        siswa.kelas ASC,
        siswa.nama ASC
      LIMIT 500`,
     params
-  );
+  ));
 
   return rows.map(toRekapSiswa);
 }
 
 async function queryAnalisisTipe(filters) {
   const where = [];
-  const whereParams = [];
-  const dateParts = getLaporanDateParts(filters, 'hs');
+  const params = [];
+  const dateParts = getLaporanDateParts(filters, 'hs', params);
+  const benarSql = isPostgres ? 'TRUE' : '1';
+  const rataBenarSql = `ROUND(AVG(CASE WHEN js.id IS NULL THEN NULL WHEN js.is_benar = ${benarSql} THEN 100 ELSE 0 END), 1)`;
 
-  addLaporanInstrumentFilters(filters, where, whereParams, { instrumen: 'i', sekolah: 's', guru: 'guru' });
+  addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        s.id as id_sekolah,
        s.nama_sekolah,
        soal.tipe_soal,
        COUNT(DISTINCT soal.id) as total_soal,
        COUNT(js.id) as total_jawaban,
-       ROUND(AVG(CASE WHEN js.is_benar = 1 THEN 100 ELSE 0 END), 1) as rata_rata_persentase_benar
+       ${rataBenarSql} as rata_rata_persentase_benar
      FROM soal soal
      JOIN instrumen i ON i.id = soal.instrumen_id
      LEFT JOIN sekolah s ON s.id = i.id_sekolah
@@ -923,54 +921,54 @@ async function queryAnalisisTipe(filters) {
      JOIN jawaban_siswa js
        ON js.soal_id = soal.id
       AND js.instrumen_id = i.id
-      AND js.id_sekolah <=> i.id_sekolah
+      AND js.id_sekolah ${nullSafeEq} i.id_sekolah
      JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
       AND hs.siswa_id = js.siswa_id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
       ${dateParts.joinSql}
      ${buildWhereSql(where)}
      GROUP BY s.id, s.nama_sekolah, soal.tipe_soal
      ORDER BY
        CASE WHEN s.id IS NULL THEN 1 ELSE 0 END,
        ${SCHOOL_ORDER_CASE_SQL},
-       rata_rata_persentase_benar ASC,
+       ${rataBenarSql} ASC,
        soal.tipe_soal ASC`,
-    [...dateParts.params, ...whereParams]
-  );
+    params
+  ));
 
   return rows.map(toAnalisisTipe);
 }
 
 async function queryKelasKritis(filters) {
   const where = [];
-  const whereParams = [];
-  const dateParts = getLaporanDateParts(filters, 'hs');
+  const params = [];
+  const dateParts = getLaporanDateParts(filters, 'hs', params);
 
-  addLaporanInstrumentFilters(filters, where, whereParams, { instrumen: 'i', sekolah: 's', guru: 'guru' });
+  addLaporanInstrumentFilters(filters, where, params, { instrumen: 'i', sekolah: 's', guru: 'guru' });
 
-  const [rows] = await pool.execute(
+  const rows = resultRows(await pool.execute(
     `SELECT
        s.id as id_sekolah,
        s.nama_sekolah,
        i.kelas,
        COUNT(hs.id) as total_pengerjaan,
        ROUND(AVG(hs.nilai), 1) as rata_rata_nilai,
-       ROUND((SUM(CASE WHEN hs.nilai >= ${KKM_DEFAULT} THEN 1 ELSE 0 END) / NULLIF(COUNT(hs.id), 0)) * 100, 1) as ketuntasan
+       ${ketuntasanSql('hs')} as ketuntasan
      FROM instrumen i
      LEFT JOIN sekolah s ON s.id = i.id_sekolah
      LEFT JOIN users guru ON guru.id = i.dibuat_oleh
      LEFT JOIN hasil_siswa hs
        ON hs.instrumen_id = i.id
-      AND hs.id_sekolah <=> i.id_sekolah
+      AND hs.id_sekolah ${nullSafeEq} i.id_sekolah
       ${dateParts.joinSql}
      ${buildWhereSql(where)}
      GROUP BY s.id, s.nama_sekolah, i.kelas
-     HAVING total_pengerjaan > 0
-     ORDER BY ketuntasan ASC, rata_rata_nilai ASC
+     HAVING COUNT(hs.id) > 0
+     ORDER BY ${ketuntasanSql('hs')} ASC, ROUND(AVG(hs.nilai), 1) ASC
      LIMIT 5`,
-    [...dateParts.params, ...whereParams]
-  );
+    params
+  ));
 
   return rows.map(row => ({
     id_sekolah: row.id_sekolah,
