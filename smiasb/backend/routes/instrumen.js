@@ -25,6 +25,9 @@ const { getUploadRoot, getUploadDir } = require('../utils/uploadPaths');
 
 const LIKE_OPERATOR = isPostgres ? 'ILIKE' : 'LIKE';
 const COUNT_TOTAL_SQL = isPostgres ? 'COUNT(*)::int' : 'COUNT(*)';
+const DEFAULT_DURASI_MENIT = 60;
+const MIN_DURASI_MENIT = 5;
+const MAX_DURASI_MENIT = 180;
 
 function resultRows(result) {
   return result.rows || result[0] || [];
@@ -32,6 +35,30 @@ function resultRows(result) {
 
 function resultInsertId(result) {
   return isPostgres ? result.rows[0]?.id : result.insertId ?? result[0]?.insertId;
+}
+
+function isBatasWaktuEnabled(value) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function toDbBatasWaktuFlag(value) {
+  const enabled = isBatasWaktuEnabled(value);
+  return isPostgres ? enabled : (enabled ? 1 : 0);
+}
+
+function normalizeDurasiMenit(value, fallback = DEFAULT_DURASI_MENIT) {
+  const parsed = Number.parseInt(value, 10);
+  const safeFallback = Number.parseInt(fallback, 10) || DEFAULT_DURASI_MENIT;
+
+  if (!Number.isFinite(parsed)) {
+    return Math.min(MAX_DURASI_MENIT, Math.max(MIN_DURASI_MENIT, safeFallback));
+  }
+
+  return Math.min(MAX_DURASI_MENIT, Math.max(MIN_DURASI_MENIT, parsed));
+}
+
+function createBatasWaktuFromDuration(durasiMenit) {
+  return new Date(Date.now() + normalizeDurasiMenit(durasiMenit) * 60 * 1000);
 }
 
 async function getRouteConnection() {
@@ -5851,7 +5878,7 @@ router.get('/:id', authenticate, async (req, res) => {
       }
 
       // ========== VALIDASI BATAS WAKTU (FITUR BARU) ==========
-      if (instrumen.gunakan_batas_waktu === 1 && instrumen.batas_waktu) {
+      if (isBatasWaktuEnabled(instrumen.gunakan_batas_waktu) && instrumen.batas_waktu) {
         const waktuBatas = new Date(instrumen.batas_waktu);
         
         if (now > waktuBatas) {
@@ -5910,7 +5937,7 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('file')
     return res.status(400).json({ success: false, errors: errors.array() });
   }
 
-  const { judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, gunakan_batas_waktu, batas_waktu, id_sekolah } = req.body;
+  const { judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, gunakan_batas_waktu, durasi_menit, id_sekolah } = req.body;
   const file_path = req.file ? req.file.filename : null;
   const file_nama = req.file ? req.file.originalname : null;
 
@@ -5933,14 +5960,21 @@ router.post('/', authenticate, authorize('guru', 'admin'), upload.single('file')
       });
     }
 
+    const nextStatus = status || 'draft';
+    const nextDurasiMenit = normalizeDurasiMenit(durasi_menit);
+    const batasWaktuAktif = isBatasWaktuEnabled(gunakan_batas_waktu);
+    const calculatedBatasWaktu = batasWaktuAktif && nextStatus === 'aktif'
+      ? createBatasWaktuFromDuration(nextDurasiMenit)
+      : null;
+
     const result = await pool.execute(
-      `INSERT INTO instrumen (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
-       VALUES (${dbPlaceholders(13).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
+      `INSERT INTO instrumen (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, durasi_menit, status, file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
+       VALUES (${dbPlaceholders(14).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
       [targetSekolah.id_sekolah, judul, deskripsi || null, jenis, mata_pelajaran, normalizedInstrumenKelas,
-       parseInt(jumlah_soal), status || 'draft',
+       parseInt(jumlah_soal), nextDurasiMenit, nextStatus,
        file_path, file_nama, req.user.id,
-       gunakan_batas_waktu !== undefined ? gunakan_batas_waktu : 0,
-       batas_waktu || null]
+       toDbBatasWaktuFlag(gunakan_batas_waktu),
+       calculatedBatasWaktu]
     );
 
     return res.status(201).json({
@@ -6048,11 +6082,17 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
       });
     }
 
+    const nextDurasiMenit = normalizeDurasiMenit(instrumenAsal.durasi_menit);
+    const batasWaktuAktif = isBatasWaktuEnabled(instrumenAsal.gunakan_batas_waktu);
+    const calculatedBatasWaktu = batasWaktuAktif && statusBaru === 'aktif'
+      ? createBatasWaktuFromDuration(nextDurasiMenit)
+      : null;
+
     const instrumenResult = await conn.execute(
       `INSERT INTO instrumen
-       (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status,
+       (id_sekolah, judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, durasi_menit, status,
         file_path, file_nama, dibuat_oleh, gunakan_batas_waktu, batas_waktu)
-       VALUES (${dbPlaceholders(13).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
+       VALUES (${dbPlaceholders(14).join(', ')})${isPostgres ? ' RETURNING id' : ''}`,
       [
         instrumenAsal.id_sekolah,
         judulBaru,
@@ -6061,12 +6101,13 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
         instrumenAsal.mata_pelajaran,
         kelasTujuan,
         targetJumlahSoal,
+        nextDurasiMenit,
         statusBaru,
         null,
         null,
         instrumenAsal.dibuat_oleh || req.user.id,
-        Number(instrumenAsal.gunakan_batas_waktu) === 1 ? 1 : 0,
-        instrumenAsal.batas_waktu || null
+        toDbBatasWaktuFlag(batasWaktuAktif),
+        calculatedBatasWaktu
       ]
     );
 
@@ -6147,7 +6188,7 @@ router.post('/:id/duplicate-to-class', authenticate, authorize('guru', 'admin'),
 // PUT /api/instrumen/:id — update instrumen (termasuk status/aktifkan)
 // ============================================================
 router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file'), async (req, res) => {
-  const { judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, gunakan_batas_waktu, batas_waktu } = req.body;
+  const { judul, deskripsi, jenis, mata_pelajaran, kelas, jumlah_soal, status, gunakan_batas_waktu, durasi_menit } = req.body;
 
   try {
     const existingResult = await pool.execute(
@@ -6168,8 +6209,9 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
     );
     const jumlahSoalSaatIni = resultRows(countResult)[0].total;
     const targetSoal = parseInt(jumlah_soal) || existing[0].jumlah_soal;
+    const nextStatus = status || existing[0].status;
 
-    if (status === 'aktif' && jumlahSoalSaatIni < targetSoal) {
+    if (nextStatus === 'aktif' && jumlahSoalSaatIni < targetSoal) {
       return res.status(400).json({
         success: false,
         message: `Tidak bisa mengaktifkan! Soal belum lengkap (${jumlahSoalSaatIni}/${targetSoal}). Silakan tambah ${targetSoal - jumlahSoalSaatIni} soal lagi.`
@@ -6198,6 +6240,28 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
       });
     }
 
+    const nextDurasiMenit = normalizeDurasiMenit(
+      durasi_menit !== undefined ? durasi_menit : existing[0].durasi_menit,
+      existing[0].durasi_menit
+    );
+    const existingDurasiMenit = normalizeDurasiMenit(existing[0].durasi_menit);
+    const nextBatasWaktuAktif = gunakan_batas_waktu !== undefined
+      ? isBatasWaktuEnabled(gunakan_batas_waktu)
+      : isBatasWaktuEnabled(existing[0].gunakan_batas_waktu);
+    const existingBatasWaktuAktif = isBatasWaktuEnabled(existing[0].gunakan_batas_waktu);
+    const shouldStartCountdown =
+      nextBatasWaktuAktif &&
+      nextStatus === 'aktif' &&
+      (
+        existing[0].status !== 'aktif' ||
+        !existingBatasWaktuAktif ||
+        nextDurasiMenit !== existingDurasiMenit ||
+        !existing[0].batas_waktu
+      );
+    const nextBatasWaktu = nextBatasWaktuAktif && nextStatus === 'aktif'
+      ? (shouldStartCountdown ? createBatasWaktuFromDuration(nextDurasiMenit) : existing[0].batas_waktu)
+      : null;
+
     await pool.execute(
       `UPDATE instrumen SET 
         judul = ${dbPlaceholder(1)},
@@ -6206,19 +6270,20 @@ router.put('/:id', authenticate, authorize('guru', 'admin'), upload.single('file
         mata_pelajaran = ${dbPlaceholder(4)},
         kelas = ${dbPlaceholder(5)},
         jumlah_soal = ${dbPlaceholder(6)},
-        status = ${dbPlaceholder(7)},
-        file_path = ${dbPlaceholder(8)},
-        file_nama = ${dbPlaceholder(9)},
-        gunakan_batas_waktu = ${dbPlaceholder(10)},
-        batas_waktu = ${dbPlaceholder(11)},
+        durasi_menit = ${dbPlaceholder(7)},
+        status = ${dbPlaceholder(8)},
+        file_path = ${dbPlaceholder(9)},
+        file_nama = ${dbPlaceholder(10)},
+        gunakan_batas_waktu = ${dbPlaceholder(11)},
+        batas_waktu = ${dbPlaceholder(12)},
         updated_at = NOW()
-       WHERE id = ${dbPlaceholder(12)}`,
+       WHERE id = ${dbPlaceholder(13)}`,
       [judul || existing[0].judul, deskripsi || existing[0].deskripsi,
        jenis || existing[0].jenis, mata_pelajaran || existing[0].mata_pelajaran,
-       normalizedInstrumenKelas, targetSoal,
-       status || existing[0].status, file_path, file_nama,
-       gunakan_batas_waktu !== undefined ? gunakan_batas_waktu : existing[0].gunakan_batas_waktu,
-       batas_waktu !== undefined ? batas_waktu : existing[0].batas_waktu,
+       normalizedInstrumenKelas, targetSoal, nextDurasiMenit,
+       nextStatus, file_path, file_nama,
+       toDbBatasWaktuFlag(nextBatasWaktuAktif),
+       nextBatasWaktu,
        req.params.id]
     );
 
@@ -6312,7 +6377,7 @@ router.delete('/:id', authenticate, authorize('guru', 'admin'), async (req, res)
 router.patch('/:id/batas-waktu', authenticate, authorize('guru', 'admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { gunakan_batas_waktu, batas_waktu } = req.body;
+    const { gunakan_batas_waktu, durasi_menit } = req.body;
 
     // Cek apakah instrumen ada
     const existingResult = await pool.execute(
@@ -6328,32 +6393,46 @@ router.patch('/:id/batas-waktu', authenticate, authorize('guru', 'admin'), async
     const access = await canAccessInstrumen(req.user, id, 'manage');
     if (!access.ok) return denyAccess(res);
 
-    // Update hanya batas waktu (tidak mengubah field lain)
+    const nextBatasWaktuAktif = gunakan_batas_waktu !== undefined
+      ? isBatasWaktuEnabled(gunakan_batas_waktu)
+      : isBatasWaktuEnabled(existing[0].gunakan_batas_waktu);
+    const nextDurasiMenit = normalizeDurasiMenit(
+      durasi_menit !== undefined ? durasi_menit : existing[0].durasi_menit,
+      existing[0].durasi_menit
+    );
+    const nextBatasWaktu = nextBatasWaktuAktif && existing[0].status === 'aktif'
+      ? createBatasWaktuFromDuration(nextDurasiMenit)
+      : null;
+
+    // Update hanya pengaturan waktu (tidak mengubah field lain)
     await pool.execute(
       `UPDATE instrumen SET 
         gunakan_batas_waktu = ${dbPlaceholder(1)},
-        batas_waktu = ${dbPlaceholder(2)},
+        durasi_menit = ${dbPlaceholder(2)},
+        batas_waktu = ${dbPlaceholder(3)},
         updated_at = NOW()
-       WHERE id = ${dbPlaceholder(3)}`,
+       WHERE id = ${dbPlaceholder(4)}`,
       [
-        gunakan_batas_waktu !== undefined ? gunakan_batas_waktu : existing[0].gunakan_batas_waktu,
-        batas_waktu !== undefined ? batas_waktu : existing[0].batas_waktu,
+        toDbBatasWaktuFlag(nextBatasWaktuAktif),
+        nextDurasiMenit,
+        nextBatasWaktu,
         id
       ]
     );
 
     return res.json({
       success: true,
-      message: 'Batas waktu berhasil diperbarui.',
+      message: 'Timer pengerjaan berhasil diperbarui.',
       data: {
-        gunakan_batas_waktu: gunakan_batas_waktu !== undefined ? gunakan_batas_waktu : existing[0].gunakan_batas_waktu,
-        batas_waktu: batas_waktu || null
+        gunakan_batas_waktu: toDbBatasWaktuFlag(nextBatasWaktuAktif),
+        durasi_menit: nextDurasiMenit,
+        batas_waktu: nextBatasWaktu
       }
     });
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, message: 'Gagal memperbarui batas waktu.' });
+    return res.status(500).json({ success: false, message: 'Gagal memperbarui timer pengerjaan.' });
   }
 });
 

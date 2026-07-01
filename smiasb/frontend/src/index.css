@@ -261,6 +261,88 @@ body {
   margin-top: 4px;
 }
 
+.exam-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.exam-sticky-time-row {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  padding: 0 0 12px;
+  margin-top: -4px;
+  pointer-events: none;
+}
+
+.exam-sticky-time-row .exam-time-card {
+  pointer-events: auto;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
+}
+
+.exam-time-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 248px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #059669;
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.exam-time-card.warning {
+  border-color: #d97706;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.exam-time-card.danger {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.exam-time-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.7);
+}
+
+.exam-time-label {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.exam-time-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-top: 2px;
+}
+
+.exam-time-deadline {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  opacity: 0.82;
+  margin-top: 3px;
+}
+
 .student-question-view,
 .student-question-view .question-text,
 .student-question-view .option-text,
@@ -1471,6 +1553,9 @@ tbody tr:hover td { background: #F8F9FA; }
 
 @media (max-width: 520px) {
   .page-content { padding: 16px; }
+  .exam-header-row { align-items: stretch; }
+  .exam-sticky-time-row { justify-content: stretch; }
+  .exam-time-card { width: 100%; min-width: 0; }
   .stat-grid { grid-template-columns: 1fr; }
   .dashboard-stat-grid { grid-template-columns: 1fr; }
   .dashboard-actions { grid-template-columns: 1fr; }

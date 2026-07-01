@@ -5,11 +5,39 @@ import { useAuth } from '../context/AuthContext'
 import { sanitizeRichHtml, stripHtml } from '../utils/sanitizeHtml'
 import { confirmToast } from '../utils/notify'
 import ActionIcon from '../components/ActionIcon'
+import { Clock3 } from 'lucide-react'
 
 const API_ASSET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
 const ANSWER_DRAFT_PREFIX = 'smiasb_answer_draft'
 const ANSWER_DRAFT_VERSION = 1
 const ACTIVE_CHATBOT_INSTRUMENT_KEY = 'smiasb_active_chatbot_instrumen_id'
+
+const isBatasWaktuAktif = (value) => (
+  value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true'
+)
+
+const getSisaWaktuDetik = (instrumenData) => {
+  if (!isBatasWaktuAktif(instrumenData?.gunakan_batas_waktu) || !instrumenData?.batas_waktu) {
+    return null
+  }
+
+  const waktuBatas = new Date(instrumenData.batas_waktu)
+  if (Number.isNaN(waktuBatas.getTime())) return null
+
+  return Math.floor((waktuBatas - new Date()) / 1000)
+}
+
+const formatDurasiMenit = (value) => {
+  const minutes = Number.parseInt(value, 10)
+  if (!Number.isFinite(minutes)) return ''
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60} jam`
+  if (minutes > 60) {
+    const hours = Math.floor(minutes / 60)
+    const rest = minutes % 60
+    return `${hours} jam ${rest} menit`
+  }
+  return `${minutes} menit`
+}
 
 export default function KerjakanSoalPage() {
   const { instrumenId } = useParams()
@@ -241,12 +269,10 @@ export default function KerjakanSoalPage() {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
   }
 
-  // ========== CEK WARNA TIMER (merah jika < 5 menit) ==========
-  const getTimerColor = () => {
-    if (sisaWaktu === null) return '#333'
-    if (sisaWaktu <= 60) return '#dc2626' // merah jika <= 1 menit
-    if (sisaWaktu <= 300) return '#f59e0b' // oranye jika <= 5 menit
-    return '#059669' // hijau jika masih banyak
+  const getTimerTone = () => {
+    if (sisaWaktu <= 60) return 'danger'
+    if (sisaWaktu <= 300) return 'warning'
+    return 'normal'
   }
 
 
@@ -891,11 +917,8 @@ export default function KerjakanSoalPage() {
       
       // ========== CEK DAN SET TIMER ==========
       const instrumenData = dataInstrumen.instrumen
-      if (instrumenData.gunakan_batas_waktu === 1 && instrumenData.batas_waktu) {
-        const waktuBatas = new Date(instrumenData.batas_waktu)
-        const sekarang = new Date()
-        const sisa = Math.floor((waktuBatas - sekarang) / 1000)
-        
+      const sisa = getSisaWaktuDetik(instrumenData)
+      if (sisa !== null) {
         if (sisa <= 0) {
           setWaktuHabis(true)
           setTimerExpired(true)
@@ -905,6 +928,8 @@ export default function KerjakanSoalPage() {
         }
         
         setSisaWaktu(sisa)
+      } else {
+        setSisaWaktu(null)
       }
       
       setInstrumen(instrumenData)
@@ -1112,6 +1137,9 @@ export default function KerjakanSoalPage() {
   }
 
   const sudahDijawab = soal.filter(s => isSoalAnswered(s, jawaban[s.id])).length
+  const batasWaktuAktif = sisaWaktu !== null && sisaWaktu > 0
+  const durasiLabel = batasWaktuAktif ? formatDurasiMenit(instrumen?.durasi_menit) : ''
+  const timerTone = batasWaktuAktif ? getTimerTone() : 'normal'
 
   if (loading) {
     return <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner spinner-dark" /></div>
@@ -1172,42 +1200,37 @@ export default function KerjakanSoalPage() {
 
   return (
     <div className="page-content">
-      {/* Header dengan Timer */}
+      {batasWaktuAktif && (
+        <div className="exam-sticky-time-row">
+          <div className={`exam-time-card ${timerTone}`}>
+            <div className="exam-time-icon">
+              <Clock3 size={18} />
+            </div>
+            <div>
+              <div className="exam-time-label">Batas Waktu Pengerjaan</div>
+              <div className="exam-time-value">{formatWaktu(sisaWaktu)}</div>
+              {durasiLabel && (
+                <div className="exam-time-deadline">Durasi {durasiLabel}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="card-header" style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div className="exam-header-row">
           <div>
             <h2>{instrumen?.judul}</h2>
             <p style={{ margin: 0 }}>{soal.length} soal - {instrumen?.mata_pelajaran} - Kelas {instrumen?.kelas}</p>
           </div>
-          
-          {/* ========== COUNTDOWN TIMER ========== */}
-          {sisaWaktu !== null && sisaWaktu > 0 && (
-            <div style={{ 
-              textAlign: 'center',
-              padding: '8px 16px',
-              borderRadius: 12,
-              background: getTimerColor() === '#dc2626' ? '#FEF2F2' : getTimerColor() === '#f59e0b' ? '#FFFBEB' : '#ECFDF5',
-              border: `1px solid ${getTimerColor()}`,
-              minWidth: 150
-            }}>
-              <div style={{ fontSize: 12, color: '#666' }}>Sisa Waktu</div>
-              <div style={{ 
-                fontSize: 24, 
-                fontWeight: 'bold', 
-                fontFamily: 'monospace',
-                color: getTimerColor()
-              }}>
-                {formatWaktu(sisaWaktu)}
-              </div>
-            </div>
-          )}
-          
+
           <div className="badge badge-gray">{sudahDijawab}/{soal.length} dijawab</div>
         </div>
       </div>
 
       <div style={{ background: '#FEF3C7', padding: 12, borderRadius: 8, marginBottom: 20 }}><strong>Perhatian!</strong> Anda hanya bisa mengerjakan soal ini SATU KALI.
-        {sisaWaktu !== null && sisaWaktu > 0 && (
+        {batasWaktuAktif && (
           <span style={{ display: 'block', marginTop: 4, fontSize: 13 }}>
             Waktu pengerjaan terbatas. Jawaban akan otomatis dikirim jika waktu habis.
           </span>
@@ -1224,7 +1247,9 @@ export default function KerjakanSoalPage() {
           <li>Untuk soal pilihan ganda, pilih satu jawaban yang paling benar.</li>
           <li>Untuk soal ganda kompleks atau benar-salah, perhatikan setiap pernyataan dengan cermat.</li>
           <li>Untuk soal menjodohkan, pasangkan jawaban sesuai dengan pasangan yang tepat.</li>
-          <li>Perhatikan waktu pengerjaan yang tersedia pada bagian atas halaman.</li>
+          {batasWaktuAktif && (
+            <li>Perhatikan sisa waktu pengerjaan pada bagian atas halaman.</li>
+          )}
           <li>Periksa kembali seluruh jawaban sebelum menekan tombol kumpulkan jawaban.</li>
           <li>Setelah jawaban dikumpulkan, siswa tidak dapat mengubah jawaban lagi.</li>
         </ol>

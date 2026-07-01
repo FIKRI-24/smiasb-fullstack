@@ -45,6 +45,26 @@ const isAdminRole = (peran) => ['admin', 'admin_sekolah', 'super_admin'].include
 const IMPORT_DRAFT_PREFIX = 'smiasb_import_draft'
 const IMPORT_DRAFT_TTL_MS = 60 * 60 * 1000
 
+const isBatasWaktuAktif = (value) => (
+  value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true'
+)
+
+const hasBatasWaktuPengerjaan = (item) => (
+  isBatasWaktuAktif(item?.gunakan_batas_waktu) && Boolean(item?.durasi_menit)
+)
+
+const formatDurasiMenit = (value) => {
+  const minutes = Number.parseInt(value, 10)
+  if (!Number.isFinite(minutes)) return '-'
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60} jam`
+  if (minutes > 60) {
+    const hours = Math.floor(minutes / 60)
+    const rest = minutes % 60
+    return `${hours} jam ${rest} menit`
+  }
+  return `${minutes} menit`
+}
+
 const toAssetUrl = (src) => {
   if (!src) return ''
   if (String(src).startsWith('http')) return src
@@ -270,7 +290,7 @@ export default function InstrumenPage() {
   const [editBatasWaktuItem, setEditBatasWaktuItem] = useState(null)
   const [editBatasWaktuForm, setEditBatasWaktuForm] = useState({
     gunakan_batas_waktu: 0,
-    batas_waktu: ''
+    durasi_menit: 60
   })
 
   // ========== TAMBAHAN: STATE IMPORT WORD / EXCEL ==========
@@ -565,12 +585,6 @@ export default function InstrumenPage() {
 
   const openEdit = (item) => {
     setEditItem(item)
-    let formattedBatasWaktu = ''
-    if (item.batas_waktu) {
-      const date = new Date(item.batas_waktu)
-      formattedBatasWaktu = date.toISOString().slice(0, 16)
-    }
-    
     setForm({
       judul: item.judul, 
       deskripsi: item.deskripsi || '',
@@ -580,8 +594,8 @@ export default function InstrumenPage() {
       jumlah_soal: item.jumlah_soal,
       durasi_menit: item.durasi_menit || 60,
       status: item.status,
-      gunakan_batas_waktu: item.gunakan_batas_waktu || 0,
-      batas_waktu: formattedBatasWaktu
+      gunakan_batas_waktu: isBatasWaktuAktif(item.gunakan_batas_waktu) ? 1 : 0,
+      batas_waktu: ''
     })
     setFile(null)
     setError('')
@@ -590,16 +604,10 @@ export default function InstrumenPage() {
 
   // ========== TAMBAHAN: FUNGSI OPEN MODAL EDIT BATAS WAKTU ==========
   const openEditBatasWaktu = (item) => {
-    let formattedBatasWaktu = ''
-    if (item.batas_waktu) {
-      const date = new Date(item.batas_waktu)
-      formattedBatasWaktu = date.toISOString().slice(0, 16)
-    }
-    
     setEditBatasWaktuItem(item)
     setEditBatasWaktuForm({
-      gunakan_batas_waktu: item.gunakan_batas_waktu || 0,
-      batas_waktu: formattedBatasWaktu
+      gunakan_batas_waktu: isBatasWaktuAktif(item.gunakan_batas_waktu) ? 1 : 0,
+      durasi_menit: item.durasi_menit || 60
     })
     setError('')
     setShowBatasWaktuModal(true)
@@ -607,8 +615,9 @@ export default function InstrumenPage() {
 
   // ========== TAMBAHAN: FUNGSI SIMPAN EDIT BATAS WAKTU ==========
   const handleSaveBatasWaktu = async () => {
-    if (editBatasWaktuForm.gunakan_batas_waktu === 1 && !editBatasWaktuForm.batas_waktu) {
-      setError('Silakan pilih tanggal dan waktu batas pengerjaan.')
+    const durasi = Number.parseInt(editBatasWaktuForm.durasi_menit, 10)
+    if (editBatasWaktuForm.gunakan_batas_waktu === 1 && (!Number.isFinite(durasi) || durasi < 5)) {
+      setError('Durasi pengerjaan minimal 5 menit.')
       return
     }
     
@@ -618,14 +627,14 @@ export default function InstrumenPage() {
     try {
       await instrumenAPI.patchBatasWaktu(editBatasWaktuItem.id, {
         gunakan_batas_waktu: editBatasWaktuForm.gunakan_batas_waktu,
-        batas_waktu: editBatasWaktuForm.batas_waktu || null
+        durasi_menit: durasi || editBatasWaktuForm.durasi_menit
       })
       
       setShowBatasWaktuModal(false)
       fetchData(pagination.page)
-      toast.success('Batas waktu berhasil diperbarui')
+      toast.success('Timer pengerjaan berhasil diperbarui')
     } catch (err) {
-      const message = err.response?.data?.message || 'Gagal memperbarui batas waktu.'
+      const message = err.response?.data?.message || 'Gagal memperbarui timer pengerjaan.'
       setError(message)
       toast.error(message)
     } finally {
@@ -2895,8 +2904,9 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
       return
     }
     
-    if (form.gunakan_batas_waktu === 1 && !form.batas_waktu) {
-      setError('Silakan pilih tanggal dan waktu batas pengerjaan.')
+    const durasi = Number.parseInt(form.durasi_menit, 10)
+    if (form.gunakan_batas_waktu === 1 && (!Number.isFinite(durasi) || durasi < 5)) {
+      setError('Durasi pengerjaan minimal 5 menit.')
       return
     }
     
@@ -3076,6 +3086,8 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
 
   const visibleAktif = items.filter(item => item.status === 'aktif').length
   const visibleDraft = items.filter(item => item.status === 'draft').length
+  const isSiswa = user?.peran === 'siswa'
+  const showBatasWaktuColumn = !isSiswa || items.some(hasBatasWaktuPengerjaan)
   const pageInfo = pagination.totalPages > 1
     ? `Halaman ${pagination.page} dari ${pagination.totalPages}`
     : `${pagination.total || items.length} instrumen`
@@ -3148,7 +3160,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
               <input
                 type="number"
                 className="input"
-                placeholder="Durasi ujian (menit)"
+                placeholder="Durasi pengerjaan (menit)"
                 value={form.durasi_menit}
                 onChange={e => setFormField('durasi_menit', e.target.value)}
                 min="5"
@@ -3170,30 +3182,18 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     onChange={(e) => setFormField('gunakan_batas_waktu', e.target.checked ? 1 : 0)}
                     style={{ width: 18, height: 18, cursor: 'pointer' }}
                   />
-                  <span style={{ fontWeight: 500 }}>Aktifkan batas waktu pengerjaan</span>
+                  <span style={{ fontWeight: 500 }}>Aktifkan timer pengerjaan</span>
                 </label>
                 {form.gunakan_batas_waktu === 1 && (
                   <span style={{ fontSize: 12, color: '#666' }}>
-                    (siswa tidak bisa mengerjakan setelah waktu habis)
+                    (timer dimulai saat instrumen aktif)
                   </span>
                 )}
               </div>
 
               {form.gunakan_batas_waktu === 1 && (
-                <div style={{ marginLeft: 26 }}>
-                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, color: '#333' }}>
-                    Batas waktu (tenggat)
-                  </label>
-                  <input
-                    type="datetime-local"
-                    className="input"
-                    value={form.batas_waktu}
-                    onChange={(e) => setFormField('batas_waktu', e.target.value)}
-                    style={{ width: '100%' }}
-                  />
-                  <small style={{ fontSize: 11, color: '#666' }}>
-                    Contoh: 2026-05-15 23:59 (siswa tidak bisa mengerjakan setelah tanggal & waktu ini)
-                  </small>
+                <div style={{ marginLeft: 26, padding: 10, background: '#EFF6FF', borderRadius: 8, fontSize: 12, color: '#1E40AF' }}>
+                  Countdown siswa akan berjalan selama <strong>{formatDurasiMenit(form.durasi_menit)}</strong> sejak instrumen disimpan dengan status aktif.
                 </div>
               )}
 
@@ -3241,13 +3241,13 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowBatasWaktuModal(false)}>
           <div className="modal" style={{ maxWidth: 450 }}>
             <div className="modal-title">
-              Edit Batas Waktu
+              Edit Timer Pengerjaan
             </div>
             
             <div style={{ marginBottom: 12, padding: 8, background: '#FEF3C7', borderRadius: 8, fontSize: 13 }}>
               Instrumen: <strong>{editBatasWaktuItem.judul}</strong>
               <br />
-              Catatan: Anda hanya bisa mengedit batas waktu, bukan soal.
+              Catatan: menyimpan durasi pada instrumen aktif akan memulai ulang hitung mundur dari sekarang.
             </div>
 
             {error && <div className="alert alert-error">{error}</div>}
@@ -3260,26 +3260,27 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                   checked={editBatasWaktuForm.gunakan_batas_waktu === 1}
                   onChange={(e) => setEditBatasWaktuForm(prev => ({ 
                     ...prev, 
-                    gunakan_batas_waktu: e.target.checked ? 1 : 0,
-                    batas_waktu: e.target.checked ? prev.batas_waktu : ''
+                    gunakan_batas_waktu: e.target.checked ? 1 : 0
                   }))}
                   style={{ width: 18, height: 18 }}
                 />
-                <span>Aktifkan batas waktu pengerjaan</span>
+                <span>Aktifkan timer pengerjaan</span>
               </label>
 
               {editBatasWaktuForm.gunakan_batas_waktu === 1 && (
                 <div>
-                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Batas waktu (tenggat)</label>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Durasi pengerjaan (menit)</label>
                   <input
-                    type="datetime-local"
+                    type="number"
                     className="input"
-                    value={editBatasWaktuForm.batas_waktu}
-                    onChange={(e) => setEditBatasWaktuForm(prev => ({ ...prev, batas_waktu: e.target.value }))}
+                    min="5"
+                    max="180"
+                    value={editBatasWaktuForm.durasi_menit}
+                    onChange={(e) => setEditBatasWaktuForm(prev => ({ ...prev, durasi_menit: e.target.value }))}
                     style={{ width: '100%' }}
                   />
                   <small style={{ fontSize: 11, color: '#666' }}>
-                    Siswa tidak bisa mengerjakan setelah tanggal & waktu ini
+                    Contoh: 90 berarti siswa melihat countdown 90 menit.
                   </small>
                 </div>
               )}
@@ -5005,7 +5006,7 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                 <th>Mapel</th>
                 <th>Kelas</th>
                 <th>Soal</th>
-                <th>Batas Waktu</th>
+                {showBatasWaktuColumn && <th>Durasi</th>}
                 <th>Status</th>
                 <th>Dibuat</th>
                 <th>Aksi</th>
@@ -5034,20 +5035,22 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                     )}
                   </td>
                   <td><span className="instrumen-count">{item.jumlah_soal}</span></td>
-                  <td>
-                    {item.gunakan_batas_waktu === 1 && item.batas_waktu ? (
-                      <span className={`instrumen-time ${new Date(item.batas_waktu) < new Date() ? 'expired' : 'active'}`}>
-                        <Clock3 size={13} />
-                        {new Date(item.batas_waktu).toLocaleString('id-ID')}
-                        {new Date(item.batas_waktu) < new Date() && ' (habis)'}
-                      </span>
-                    ) : (
-                      <span className="instrumen-time muted">
-                        <Clock3 size={13} />
-                        Tidak terbatas
-                      </span>
-                    )}
-                  </td>
+                  {showBatasWaktuColumn && (
+                    <td>
+                      {hasBatasWaktuPengerjaan(item) ? (
+                        <span className={`instrumen-time ${item.batas_waktu && new Date(item.batas_waktu) < new Date() ? 'expired' : 'active'}`}>
+                          <Clock3 size={13} />
+                          {formatDurasiMenit(item.durasi_menit)}
+                          {item.batas_waktu && new Date(item.batas_waktu) < new Date() && ' (habis)'}
+                        </span>
+                      ) : !isSiswa ? (
+                        <span className="instrumen-time muted">
+                          <Clock3 size={13} />
+                          Tidak terbatas
+                        </span>
+                      ) : null}
+                    </td>
+                  )}
                   <td>
                     <span className={`badge badge-${statusColor[item.status] || 'gray'}`}>
                       <span className={`dot dot-${item.status === 'aktif' ? 'green' : item.status === 'draft' ? 'amber' : 'red'}`} />
@@ -5102,10 +5105,10 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                             Gunakan untuk Kelas Lain
                           </button>
                         )}
-                        {/* TAMBAHAN: TOMBOL EDIT WAKTU UNTUK GURU */}
+                        {/* TAMBAHAN: TOMBOL EDIT TIMER UNTUK GURU */}
                         <button className="btn btn-amber btn-sm" onClick={() => openEditBatasWaktu(item)}>
                           <ActionIcon name="edit" size={14} />
-                          Edit Waktu
+                          Edit Timer
                         </button>
                       </>
                     )}
@@ -5150,10 +5153,10 @@ const removeMenjodohkanItem = (soalIndex, itemIndex) => {
                           <ActionIcon name="edit" size={14} />
                           Edit
                         </button>
-                        {/* TAMBAHAN: TOMBOL EDIT WAKTU UNTUK ADMIN */}
+                        {/* TAMBAHAN: TOMBOL EDIT TIMER UNTUK ADMIN */}
                         <button className="btn btn-amber btn-sm" onClick={() => openEditBatasWaktu(item)}>
                           <ActionIcon name="edit" size={14} />
-                          Edit Waktu
+                          Edit Timer
                         </button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>
                           <ActionIcon name="delete" size={14} />
